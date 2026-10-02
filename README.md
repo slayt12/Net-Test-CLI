@@ -5,7 +5,8 @@ Windows 11 and Linux that measure round-trip latency, loss, jitter, connection s
 throughput over WebSocket, TCP and UDP, and probe devices that cannot run software (IP phones,
 switches, gateways) with ping, TCP connect, SIP OPTIONS and HTTP.
 
-[![Version](https://img.shields.io/github/v/tag/slayt12/Net-Test-CLI?label=version)](https://github.com/slayt12/Net-Test-CLI/releases)
+[![Release](https://img.shields.io/github/v/release/slayt12/Net-Test-CLI?label=release)](https://github.com/slayt12/Net-Test-CLI/releases)
+[![Release build](https://github.com/slayt12/Net-Test-CLI/actions/workflows/release.yml/badge.svg)](https://github.com/slayt12/Net-Test-CLI/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%2011%20%7C%20Linux-lightgrey)
 ![Rust](https://img.shields.io/badge/rust-2024%20edition-orange)
@@ -22,30 +23,38 @@ troubleshooting recipes: [nettest-admin-guide.pdf](nettest-admin-guide.pdf).
 
 ## Download
 
-Prebuilt binaries for every tagged version are committed under [releases/](releases/) and
-attached to the [GitHub Releases](https://github.com/slayt12/Net-Test-CLI/releases) page. Nothing
-to install: copy the file, run it. Current version **1.0.0**.
+Ready-to-run packages for every version are on the
+**[Releases page](https://github.com/slayt12/Net-Test-CLI/releases)**. Nothing to install: unpack,
+copy the file where you need it, run it. Current version **1.0.0**.
 
-| File | Platform |
+| Asset | Contents |
 |---|---|
-| [nettest-client.exe](releases/v1.0.0/nettest-client.exe), [nettest-server.exe](releases/v1.0.0/nettest-server.exe) | Windows 11 x86-64 (imports only system DLLs) |
-| [nettest-client](releases/v1.0.0/nettest-client), [nettest-server](releases/v1.0.0/nettest-server) | Linux x86-64, glibc 2.39+ (Fedora 40+, Ubuntu 24.04+, Debian 13+); see [Building](#building) for a static build |
-| [SHA256SUMS](releases/v1.0.0/SHA256SUMS) | checksums of the four files above |
+| `nettest-<version>-windows-x86_64.zip` | `nettest-client.exe`, `nettest-server.exe`, the admin guide (PDF), README, LICENSE |
+| `nettest-<version>-linux-x86_64.tar.gz` | `nettest-client`, `nettest-server`, the admin guide (PDF), README, LICENSE |
+| `nettest-client-windows-x86_64.exe`, `nettest-server-windows-x86_64.exe` | single executables for Windows 11 x86-64 (import only system DLLs) |
+| `nettest-client-linux-x86_64`, `nettest-server-linux-x86_64` | single executables for Linux x86-64 (`chmod +x` after download) |
+| `SHA256SUMS` | checksums of every asset |
 
 ```sh
-# Linux
-curl -LO https://github.com/slayt12/Net-Test-CLI/raw/main/releases/v1.0.0/nettest-client
-chmod +x nettest-client && ./nettest-client --version
+# Linux: unpack the archive, or grab one binary
+curl -LO https://github.com/slayt12/Net-Test-CLI/releases/latest/download/nettest-client-linux-x86_64
+chmod +x nettest-client-linux-x86_64 && ./nettest-client-linux-x86_64 --version
 
 # Windows (PowerShell)
-Invoke-WebRequest https://github.com/slayt12/Net-Test-CLI/raw/main/releases/v1.0.0/nettest-client.exe -OutFile nettest-client.exe
+Invoke-WebRequest https://github.com/slayt12/Net-Test-CLI/releases/latest/download/nettest-client-windows-x86_64.exe -OutFile nettest-client.exe
 .\nettest-client.exe --version
 ```
 
-Verify with `sha256sum -c SHA256SUMS` (Linux) or `Get-FileHash nettest-client.exe` (Windows).
-The executables are not code-signed, so Windows SmartScreen may show "Windows protected your PC"
-on first run; choose *More info* then *Run anyway*. Windows Defender Firewall asks once when
-the server first listens.
+Verify with `sha256sum -c SHA256SUMS` (Linux) or `Get-FileHash` (Windows). The executables are
+not code-signed, so Windows SmartScreen may show "Windows protected your PC" on first run; choose
+*More info* then *Run anyway*. Windows Defender Firewall asks once when the server first listens.
+Release Linux binaries are built on Ubuntu 22.04 and run on glibc 2.35 or newer (Ubuntu 22.04+,
+Debian 12+, RHEL 9+, Fedora 36+); older systems can build the static musl variant, see
+[Building](#building).
+
+Releases are produced by the `release` GitHub Actions workflow from the tagged source, so every
+asset is reproducible from the tag. The bare binaries for each version are also committed under
+[releases/](releases/) as a fallback when the Releases page is unreachable.
 
 ---
 
@@ -369,8 +378,11 @@ Release profile is tuned for size (`opt-level = "s"`, fat LTO, `panic = "abort"`
 roughly 2.5 MB per binary.
 
 The version is set once in the workspace `Cargo.toml` and reported by `--version`, in the
-server banner and in the HTML report. Shipped binaries for each tag live in `releases/<version>/`
-with a `SHA256SUMS` file; `target/` is never committed.
+server banner and in the HTML report. To publish a release: bump that version, commit, tag
+`v<version>` and push the tag. The `release` workflow (`.github/workflows/release.yml`) tests,
+builds both platforms, runs `scripts/package.sh` and uploads the archives, bare binaries and
+`SHA256SUMS` to the Releases page. The same script produces identical files locally into `dist/`
+for a manual `gh release create`. `target/` and `dist/` are never committed.
 
 ### Application icon
 
@@ -395,7 +407,9 @@ crates/nettest-server    listeners (with scanner banner), session table, shared 
                          log pipeline, TUI, service/ (systemd + Windows SCM install, elevation),
                          tests/loopback.rs (real server + real client per protocol, banner tests)
 assets/                  icon.svg source, rendered PNGs and icon.ico
-releases/<version>/      shipped binaries for each tagged version plus SHA256SUMS
+releases/<version>/      bare binaries committed per tagged version as a fallback download
+scripts/package.sh       builds the Releases assets (archives, binaries, SHA256SUMS, notes) into dist/
+.github/workflows/       release.yml: tag push -> test, build, package, publish to GitHub Releases
 xtask/                   developer tasks (icon rendering); excluded from default builds
 ```
 

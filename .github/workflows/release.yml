@@ -1,0 +1,76 @@
+# Builds and publishes download-ready packages on the GitHub Releases page.
+#
+# Triggers: pushing a tag that starts with "v" (the normal path), or "Run workflow" in the Actions
+# tab with an existing tag name (for tags created before this workflow existed, or to rebuild).
+# The Linux binaries are built on ubuntu-22.04 on purpose: its glibc 2.35 keeps them runnable on
+# Ubuntu 22.04+, Debian 12+, RHEL 9+ and Fedora 36+. Windows binaries are cross-compiled with the
+# same MinGW toolchain used for development (see .cargo/config.toml), so no Windows runner is
+# needed. Asset names and release notes come from scripts/package.sh.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish, e.g. v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      # The packaging script comes from the ref that carries this workflow, so a tag created
+      # before the script existed can still be published with "Run workflow".
+      - name: Check out the packaging script
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          path: .tooling
+          sparse-checkout: scripts
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Install the MinGW cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 zip
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build Linux
+        run: cargo build --release
+
+      - name: Build Windows
+        run: cargo build --release --target x86_64-pc-windows-gnu
+
+      - name: Package
+        run: NETTEST_ROOT="$GITHUB_WORKSPACE" .tooling/scripts/package.sh "$TAG"
+
+      - name: Publish to GitHub Releases
+        run: |
+          assets=(dist/*.tar.gz dist/*.zip dist/*-linux-x86_64 dist/*.exe dist/SHA256SUMS)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            gh release edit "$TAG" --notes-file dist/RELEASE_NOTES.md
+          else
+            gh release create "$TAG" "${assets[@]}" --verify-tag \
+              --title "nettest ${TAG#v}" --notes-file dist/RELEASE_NOTES.md
+          fi

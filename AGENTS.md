@@ -77,8 +77,11 @@ nobody has to rediscover them.
 - Every listener must answer non-nettest traffic with the banner (`ServerConfig::banner_line`);
   a silent port is a regression. A service install must refuse an empty token.
 - `Protocol::ALL` order is the TUI cycle order: nettest protocols first, then serverless probes.
-- **Releases:** `releases/<version>/` holds the four shipped binaries plus `SHA256SUMS` and is
-  the only build output committed (`.gitignore` excludes `target/`). To cut a release: bump
-  `workspace.package.version` in `Cargo.toml`, rebuild both targets in release mode, refresh the
-  directory and checksums, update the version strings in README.md and the admin guide, then tag
-  `v<version>`. The admin guide HTML source is not in the repo (see memory notes).
+- **Releases:** pushing a tag `v<version>` runs `.github/workflows/release.yml`, which tests,
+  builds both targets on ubuntu-22.04 (glibc 2.35 floor), runs `scripts/package.sh` and publishes
+  the archives, bare binaries and `SHA256SUMS` to GitHub Releases. `package.sh` refuses when the
+  built `--version` differs from the tag, so bump `workspace.package.version` in `Cargo.toml`
+  (and the version strings in README.md and the admin guide) before tagging. For a tag that
+  predates the workflow, use "Run workflow" in the Actions tab with the tag name. `target/` and
+  `dist/` are ignored; `releases/<version>/` holds bare binaries committed as a fallback download
+  (the exception in `.gitignore`). The admin guide HTML source is not in the repo.

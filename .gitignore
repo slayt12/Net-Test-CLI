@@ -1,5 +1,6 @@
 # Cargo build output. Nothing under target/ is committed; shipped binaries live in releases/.
 /target/
+/dist/
 
 # Files the client and server write into the working tree during test runs
 # (nettest-<timestamp>.csv/.jsonl/.log/.html, server logs, certificates from --cert-dir .)
