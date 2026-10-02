@@ -1,0 +1,5 @@
+# Cross-compiling for Windows from Linux. Rust's windows-gnu target bundles its own MinGW CRT
+# objects, so only the linker needs to be named. Build with:
+#   cargo build --release --target x86_64-pc-windows-gnu
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
