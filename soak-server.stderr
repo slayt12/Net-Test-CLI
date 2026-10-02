@@ -1,5 +1,0 @@
-2026-10-02 11:25:07.611 INFO  listening ws://172.16.89.25:9100
-2026-10-02 11:25:07.612 INFO  press Ctrl-C to stop
-2026-10-02 11:25:17.125 INFO  [1] ws connect from 172.16.89.25:52078
-2026-10-02 11:25:20.127 INFO  [1] ws 172.16.89.25:52078 disconnected (bye); 0 probes, 8 frames, 0.3 KB in, 0.3 KB out, 3s
-2026-10-02 11:25:21.765 INFO  [2] ws connect from 10.212.134.10:51718

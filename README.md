@@ -1,10 +1,60 @@
 # nettest
 
-Lightweight client/server pair for troubleshooting network paths from a terminal. Two small,
-dependency-free binaries (Windows 11+ and Linux) that measure round-trip latency, loss, jitter,
-connection stability and throughput over **WebSocket (ws / wss), raw TCP and UDP**. The client
-can also probe devices that cannot run a server (IP phones, switches, gateways) with **ICMP ping,
-TCP connect, SIP OPTIONS and HTTP(S)**, producing the same statistics, chart and reports.
+**Network path troubleshooting from a terminal.** Two small, dependency-free binaries for
+Windows 11 and Linux that measure round-trip latency, loss, jitter, connection stability and
+throughput over WebSocket, TCP and UDP, and probe devices that cannot run software (IP phones,
+switches, gateways) with ping, TCP connect, SIP OPTIONS and HTTP.
+
+[![Version](https://img.shields.io/github/v/tag/slayt12/Net-Test-CLI?label=version)](https://github.com/slayt12/Net-Test-CLI/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-Windows%2011%20%7C%20Linux-lightgrey)
+![Rust](https://img.shields.io/badge/rust-2024%20edition-orange)
+
+**Contents:** [Download](#download) · [Quick start](#quick-start) · [Client](#client) ·
+[Server](#server) · [Running as a service](#running-the-server-as-a-service) ·
+[Wire format](#wire-format) · [Building](#building) · [Layout](#layout) ·
+[Troubleshooting](#troubleshooting-with-it) · [License](#license-and-support)
+
+Full manual with a walkthrough of every screen, a field-by-field settings reference and
+troubleshooting recipes: [nettest-admin-guide.pdf](nettest-admin-guide.pdf).
+
+---
+
+## Download
+
+Prebuilt binaries for every tagged version are committed under [releases/](releases/) and
+attached to the [GitHub Releases](https://github.com/slayt12/Net-Test-CLI/releases) page. Nothing
+to install: copy the file, run it. Current version **1.0.0**.
+
+| File | Platform |
+|---|---|
+| [nettest-client.exe](releases/v1.0.0/nettest-client.exe), [nettest-server.exe](releases/v1.0.0/nettest-server.exe) | Windows 11 x86-64 (imports only system DLLs) |
+| [nettest-client](releases/v1.0.0/nettest-client), [nettest-server](releases/v1.0.0/nettest-server) | Linux x86-64, glibc 2.39+ (Fedora 40+, Ubuntu 24.04+, Debian 13+); see [Building](#building) for a static build |
+| [SHA256SUMS](releases/v1.0.0/SHA256SUMS) | checksums of the four files above |
+
+```sh
+# Linux
+curl -LO https://github.com/slayt12/Net-Test-CLI/raw/main/releases/v1.0.0/nettest-client
+chmod +x nettest-client && ./nettest-client --version
+
+# Windows (PowerShell)
+Invoke-WebRequest https://github.com/slayt12/Net-Test-CLI/raw/main/releases/v1.0.0/nettest-client.exe -OutFile nettest-client.exe
+.\nettest-client.exe --version
+```
+
+Verify with `sha256sum -c SHA256SUMS` (Linux) or `Get-FileHash nettest-client.exe` (Windows).
+The executables are not code-signed, so Windows SmartScreen may show "Windows protected your PC"
+on first run; choose *More info* then *Run anyway*. Windows Defender Firewall asks once when
+the server first listens.
+
+---
+
+## What it is
+
+Lightweight client/server pair for troubleshooting network paths from a terminal. The server
+end echoes probes over **WebSocket (ws / wss), raw TCP and UDP**; the client can also probe
+devices that cannot run a server with **ICMP ping, TCP connect, SIP OPTIONS and HTTP(S)**,
+producing the same statistics, live chart and reports.
 
 ```
 nettest-server          runs on the far end: echoes probes, counts throughput, logs clients;
@@ -219,7 +269,7 @@ nettest-server service install|edit|uninstall|start|stop|restart|status [...]
   and wss ports an HTTP request receives `HTTP/1.1 200` with a `text/plain` body, any other bytes
   (or silence for 3 s) receive the bare line, and a non-nettest UDP datagram receives the same
   line (at most one reply per source IP every 2 s and 50 per second overall, so the server cannot
-  amplify traffic). The text is `nettest by Slaytons Technology Services (nettest-server x.y.z)`;
+  amplify traffic). The text is `nettest by Slaytons Technology Services (nettest-server 1.0.0)`;
   `--banner` changes the first part. Real clients are unaffected: the first bytes are classified
   and replayed into the protocol handler. Each banner reply is logged as `[scan] <proto> <peer>`.
 * The TUI shows listeners, the wss fingerprint, and a live client table (protocol, peer,
@@ -318,6 +368,10 @@ x86_64-unknown-linux-musl`; ring's C sources need a working `cc` for that target
 Release profile is tuned for size (`opt-level = "s"`, fat LTO, `panic = "abort"`, stripped):
 roughly 2.5 MB per binary.
 
+The version is set once in the workspace `Cargo.toml` and reported by `--version`, in the
+server banner and in the HTML report. Shipped binaries for each tag live in `releases/<version>/`
+with a `SHA256SUMS` file; `target/` is never committed.
+
 ### Application icon
 
 `assets/icon.svg` is the source: the Lucide "cable" glyph on the slaytons.net theme blue
@@ -341,6 +395,7 @@ crates/nettest-server    listeners (with scanner banner), session table, shared 
                          log pipeline, TUI, service/ (systemd + Windows SCM install, elevation),
                          tests/loopback.rs (real server + real client per protocol, banner tests)
 assets/                  icon.svg source, rendered PNGs and icon.ico
+releases/<version>/      shipped binaries for each tagged version plus SHA256SUMS
 xtask/                   developer tasks (icon rendering); excluded from default builds
 ```
 
@@ -366,3 +421,13 @@ xtask/                   developer tasks (icon rendering); excluded from default
 * **A vulnerability scan reports an unknown service** on 9100-9102: that is nettest; connect
   with a browser or `curl` to see the identification banner. Set `--banner` if your scanner
   needs specific text.
+
+---
+
+## License and support
+
+MIT, see [LICENSE](LICENSE). Copyright Slayton's Technology Services.
+
+Bugs and feature requests: [github.com/slayt12/Net-Test-CLI/issues](https://github.com/slayt12/Net-Test-CLI/issues).
+Include the output of `--version`, the exact command line, the OS on both ends, and the CSV or
+HTML report from the run if you have one.

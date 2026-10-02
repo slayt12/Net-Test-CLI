@@ -77,3 +77,8 @@ nobody has to rediscover them.
 - Every listener must answer non-nettest traffic with the banner (`ServerConfig::banner_line`);
   a silent port is a regression. A service install must refuse an empty token.
 - `Protocol::ALL` order is the TUI cycle order: nettest protocols first, then serverless probes.
+- **Releases:** `releases/<version>/` holds the four shipped binaries plus `SHA256SUMS` and is
+  the only build output committed (`.gitignore` excludes `target/`). To cut a release: bump
+  `workspace.package.version` in `Cargo.toml`, rebuild both targets in release mode, refresh the
+  directory and checksums, update the version strings in README.md and the admin guide, then tag
+  `v<version>`. The admin guide HTML source is not in the repo (see memory notes).

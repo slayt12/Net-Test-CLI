@@ -1,5 +1,21 @@
-target/
-*.html
+# Cargo build output. Nothing under target/ is committed; shipped binaries live in releases/.
+/target/
+
+# Files the client and server write into the working tree during test runs
+# (nettest-<timestamp>.csv/.jsonl/.log/.html, server logs, certificates from --cert-dir .)
 *.csv
 *.jsonl
 *.log
+*.stderr
+*.html
+*.pem
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Deliberate exception: release binaries for each tagged version are committed under releases/.
+!releases/
+!releases/**
