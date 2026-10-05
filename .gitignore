@@ -20,3 +20,6 @@ Thumbs.db
 # Deliberate exception: release binaries for each tagged version are committed under releases/.
 !releases/
 !releases/**
+
+# Deliberate exception: the admin guide's HTML source (the *.html rule above is for test output).
+!docs/nettest-admin-guide.html

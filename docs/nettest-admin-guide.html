@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>nettest Administrator Guide</title>
+<!--
+  Source of nettest-admin-guide.pdf. Render with:
+    chromium --headless=new --no-sandbox --disable-gpu --no-pdf-header-footer \
+      --generate-pdf-document-outline --print-to-pdf=nettest-admin-guide.pdf docs/nettest-admin-guide.html
+  Keep the version line, the banner text and the footer in step with Cargo.toml.
+-->
+<style>
+  @page { size: Letter; margin: 0.75in 0.7in; }
+  html { font-size: 9.6pt; }
+  body { font-family: "Liberation Sans", Arial, Helvetica, sans-serif; line-height: 1.4; color: #1c1e22; margin: 0; }
+  h1 { font-size: 23.7pt; color: #007aff; margin: 0 0 4pt; line-height: 1.15; }
+  .subtitle { font-size: 10pt; color: #5b6472; margin: 0 0 2pt; }
+  .meta { font-size: 8.6pt; color: #5b6472; margin: 0 0 12pt; }
+  .titlebar { display: flex; align-items: center; gap: 14pt; border-bottom: 2px solid #007aff; padding-bottom: 10pt; margin-bottom: 12pt; }
+  .titlebar img { width: 54px; height: 54px; }
+  h2 { font-size: 13.7pt; color: #1c1e22; border-bottom: 1.5px solid #007aff; padding-bottom: 3pt; margin: 20pt 0 8pt; break-after: avoid; }
+  h2.page { break-before: page; margin-top: 0; }
+  h3 { font-size: 10.5pt; color: #2a3039; margin: 12pt 0 4pt; break-after: avoid; }
+  p { margin: 0 0 7pt; }
+  ul, ol { margin: 0 0 7pt; padding-left: 18pt; }
+  li { margin-bottom: 2pt; }
+  code, pre, kbd { font-family: "DejaVu Sans Mono", Consolas, monospace; font-size: 8.6pt; }
+  code { background: #f2f3f5; padding: 0 2px; border-radius: 2px; white-space: nowrap; }
+  pre { background: #f2f3f5; border: 1px solid #d9dde3; padding: 6pt 8pt; margin: 4pt 0 9pt; white-space: pre-wrap; break-inside: avoid; line-height: 1.35; }
+  pre code { background: none; padding: 0; white-space: pre-wrap; }
+  kbd { background: #f2f3f5; border: 1px solid #d9dde3; border-radius: 3px; padding: 0 3px; font-size: 8.4pt; }
+  table { border-collapse: collapse; width: 100%; margin: 4pt 0 10pt; font-size: 9.1pt; }
+  th, td { border: 1px solid #d9dde3; padding: 3pt 5pt; vertical-align: top; text-align: left; }
+  th { background: #f2f3f5; font-weight: bold; }
+  tr { break-inside: avoid; }
+  td code { white-space: normal; }
+  .toc ol { columns: 2; column-gap: 24pt; padding-left: 22pt; margin: 4pt 0 10pt; }
+  .toc li { break-inside: avoid; }
+  .toc a { color: #1c1e22; text-decoration: none; }
+  .note { border-left: 3px solid #007aff; background: #f2f3f5; padding: 5pt 8pt; margin: 6pt 0 9pt; }
+  .footer { margin-top: 24pt; color: #5b6472; font-size: 8.4pt; border-top: 1px solid #d9dde3; padding-top: 4pt; }
+  .keys td:first-child { white-space: nowrap; }
+  .narrow td:first-child { width: 26%; }
+</style>
+</head>
+<body>
+
+<div class="titlebar">
+  <img src="../assets/icon-128.png" alt="">
+  <div>
+    <h1>nettest Administrator Guide</h1>
+    <p class="subtitle">Network path troubleshooting with the nettest client and server</p>
+    <p class="meta">Version 1.1.0 · Covers Windows 11 and Linux · October 2026 (revision 3: endpoint monitoring service with ntfy / Slack / Discord alerts)</p>
+  </div>
+</div>
+
+<p>nettest is a two-part tool for diagnosing flaky network paths. The <b>server</b> runs at the far end and echoes test traffic. The <b>client</b> runs where the problem is seen, measures round-trip latency, packet loss, jitter, connection stability and throughput, and shows the results live in a terminal window or writes them to files for a ticket. Both parts are single executables with no installer and no runtime dependencies.</p>
+<p>It speaks the same test protocol over four transports, <b>WebSocket (ws)</b>, <b>WebSocket over TLS (wss)</b>, <b>raw TCP</b> and <b>UDP</b>, so you can tell apart "the network drops packets" from "the proxy kills WebSocket connections" from "TLS negotiation is slow" using one tool. For devices that cannot run software, such as IP phones, switches and gateways, the client also probes with <b>ICMP ping</b>, <b>TCP connect</b>, <b>SIP OPTIONS</b> and <b>HTTP(S)</b>, with the same statistics, chart and reports (section 8).</p>
+<p>New in 1.1.0: the client can run as a <b>monitoring service</b> that watches any number of endpoints around the clock and sends an <b>ntfy</b>, <b>Slack</b> or <b>Discord</b> message when one goes down and when it comes back (section 9).</p>
+
+<div class="toc">
+<ol>
+  <li><a href="#s1">Requirements and deployment</a></li>
+  <li><a href="#s2">Server: settings and operation</a></li>
+  <li><a href="#s3">Server: running as a system service</a></li>
+  <li><a href="#s4">Client: interactive terminal UI</a></li>
+  <li><a href="#s5">Client: settings reference</a></li>
+  <li><a href="#s6">Client: headless and scripted use</a></li>
+  <li><a href="#s7">Test modes and what they measure</a></li>
+  <li><a href="#s8">Testing devices without a server</a></li>
+  <li><a href="#s9">Client: monitoring endpoints as a service</a></li>
+  <li><a href="#s10">Exports and log files</a></li>
+  <li><a href="#s11">Reading the results</a></li>
+  <li><a href="#s12">Troubleshooting recipes</a></li>
+  <li><a href="#s13">Quick reference card</a></li>
+</ol>
+</div>
+
+<h2 id="s1">1. Requirements and deployment</h2>
+<table class="narrow">
+<tr><th>Item</th><th>Requirement</th></tr>
+<tr><td>Operating system</td><td>Windows 11 or later (x64). Linux x64 with a current glibc (any mainstream distribution from the last few years).</td></tr>
+<tr><td>Dependencies</td><td>None. No .NET, no Visual C++ runtime, no OpenSSL, no Python. TLS is built in, including the public root certificates the monitor needs for HTTPS webhooks.</td></tr>
+<tr><td>Privileges</td><td>Standard user for all tests. <code>ping://</code> uses the unprivileged ICMP API on Windows and the unprivileged "ping socket" on Linux (allowed for everyone on current Fedora, Ubuntu, Debian and other systemd-based distributions; otherwise root). Installing the server or the client monitor <b>as a service</b> needs administrator / root; the installer asks for it itself (sections 3 and 9).</td></tr>
+<tr><td>Disk and memory</td><td>About 3 MB per executable. Memory stays flat during multi-hour runs and for a monitor that runs for months.</td></tr>
+<tr><td>Terminal</td><td>Any modern terminal: Windows Terminal, PowerShell, cmd.exe, or any Linux terminal. The interactive view needs at least 80x24 characters; 130x40 is comfortable.</td></tr>
+<tr><td>Network</td><td>Server: inbound access on the ports you enable (defaults below). Client: outbound access to those ports, or to the device's ICMP / SIP / HTTP ports for serverless probes. Monitor: additionally outbound HTTPS (port 443) to ntfy.sh, Slack or Discord, or to your own ntfy server. HTTP proxies are not traversed automatically; test the direct path.</td></tr>
+<tr><td>Clock sync</td><td>Not required. All latency is round-trip and measured on the client's own clock.</td></tr>
+</table>
+
+<h3>Files to deploy</h3>
+<table class="narrow">
+<tr><th>File</th><th>Where</th></tr>
+<tr><td><code>nettest-server.exe</code> / <code>nettest-server</code></td><td>The machine at the far end of the path under test (a server in the datacenter, a cloud VM, the other office).</td></tr>
+<tr><td><code>nettest-client.exe</code> / <code>nettest-client</code></td><td>The machine where the problem is experienced (a user's PC, a branch workstation, a kiosk). The same file is the monitor: put it on a machine that stays on, in the network whose view of the endpoints you care about.</td></tr>
+</table>
+<p>Copy the file anywhere and run it from a terminal. On Linux mark it executable first: <code>chmod +x nettest-server</code>. For a permanent server use <code>nettest-server service install</code> (section 3), for a permanent monitor <code>nettest-client service install</code> (section 9); both copy the file to the system location and register it to start at boot. When run by hand, each side stores its saved settings and, for the server, its TLS certificate, under the per-user configuration directory:</p>
+<table class="narrow">
+<tr><th>Platform</th><th>Configuration directory</th></tr>
+<tr><td>Windows</td><td><code>%APPDATA%\nettest\</code> (for example <code>C:\Users\jdoe\AppData\Roaming\nettest\</code>)</td></tr>
+<tr><td>Linux</td><td><code>~/.config/nettest/</code></td></tr>
+</table>
+<p><b>Firewall.</b> Windows Defender Firewall prompts the first time the server starts; allow it on the network profile you are testing (usually Private or Domain). On Linux, open the ports in firewalld, ufw or nftables. UDP must be allowed inbound on the server like any UDP service. The client and the monitor need no inbound rules.</p>
+
+<h2 id="s2" class="page">2. Server: settings and operation</h2>
+<p>Start the server with no arguments for the interactive view, or with <code>--no-tui</code> to log to the console (for services, scheduled tasks and SSH sessions). Every setting is available as a command-line switch, as an environment variable, or in the saved configuration file. Precedence is switch, then environment variable, then configuration file, then built-in default.</p>
+<pre>nettest-server
+nettest-server --no-tui --token s3cret --log-file C:\logs\nettest-server.log
+nettest-server --bind 172.16.89.25 --ws-port 9100 --tcp-port 0 --udp-port 0 --wss-port 0</pre>
+<table>
+<tr><th>Switch</th><th>Environment</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>--bind &lt;ip|any&gt;</code></td><td><code>NETTEST_BIND</code></td><td><code>any</code></td><td>Address to listen on. <code>any</code> binds both IPv4 and IPv6 wildcards. Give a specific IP to restrict to one interface.</td></tr>
+<tr><td><code>--tcp-port N</code></td><td><code>NETTEST_TCP_PORT</code></td><td>9100</td><td>Raw TCP listener. <code>0</code> disables it.</td></tr>
+<tr><td><code>--udp-port N</code></td><td><code>NETTEST_UDP_PORT</code></td><td>9100</td><td>UDP listener. <code>0</code> disables it.</td></tr>
+<tr><td><code>--ws-port N</code></td><td><code>NETTEST_WS_PORT</code></td><td>9101</td><td>WebSocket (ws://) listener. <code>0</code> disables it.</td></tr>
+<tr><td><code>--wss-port N</code></td><td><code>NETTEST_WSS_PORT</code></td><td>9102</td><td>WebSocket over TLS (wss://) listener. <code>0</code> disables it and skips certificate generation.</td></tr>
+<tr><td><code>--token &lt;secret&gt;</code></td><td><code>NETTEST_TOKEN</code></td><td>(none)</td><td>Pre-shared token. Clients that do not present the same token are rejected. A foreground server without a token logs a warning at start; a service cannot be installed without one.</td></tr>
+<tr><td><code>--log-file &lt;path&gt;</code></td><td></td><td>(none)</td><td>Append human-readable log lines (connects, disconnects, rejections) to this file.</td></tr>
+<tr><td><code>--jsonl &lt;path&gt;</code></td><td></td><td>(none)</td><td>Append the same events as JSON Lines for log collectors.</td></tr>
+<tr><td><code>--cert-dir &lt;dir&gt;</code></td><td></td><td>config dir<code>/server/</code></td><td>Where <code>cert.pem</code> and <code>key.pem</code> live. Generated on first start if missing; replace with your own PEM pair if you want a CA-signed certificate.</td></tr>
+<tr><td><code>--idle-timeout N</code></td><td></td><td>60</td><td>Seconds without traffic before a client session is closed. Must be longer than the client's heartbeat interval in soak tests.</td></tr>
+<tr><td><code>--banner &lt;text&gt;</code></td><td><code>NETTEST_BANNER</code></td><td>nettest by Slaytons Technology Services</td><td>Identification text returned to port scanners and browsers on every listener (see "Scanner identification" below). The server version is appended automatically. It cannot be disabled.</td></tr>
+<tr><td><code>--no-tui</code></td><td></td><td>off</td><td>Plain console logging instead of the interactive view.</td></tr>
+<tr><td><code>--config &lt;path&gt;</code></td><td></td><td>config dir<code>/server.toml</code></td><td>Use a different configuration file.</td></tr>
+<tr><td><code>--save-config</code></td><td></td><td></td><td>Write the effective settings to the configuration file, then keep running. Afterwards <code>nettest-server</code> alone starts with those settings.</td></tr>
+</table>
+
+<h3>Interactive view</h3>
+<p>The server view shows the active listeners, whether a token is required, the wss certificate fingerprint, a live table of connected clients (protocol, peer address, client id, test mode, connection age, idle time, probe count, bytes in and out) and a scrolling log.</p>
+<table class="keys narrow">
+<tr><th>Key</th><th>Action</th></tr>
+<tr><td><kbd>c</kbd></td><td>Clear the log panel</td></tr>
+<tr><td><kbd>w</kbd></td><td>Save the effective settings to the configuration file</td></tr>
+<tr><td><kbd>?</kbd></td><td>Help overlay</td></tr>
+<tr><td><kbd>q</kbd> or <kbd>Ctrl-C</kbd></td><td>Stop the server and exit</td></tr>
+</table>
+
+<h3>TLS (wss) and the fingerprint</h3>
+<p>When the wss listener is enabled the server creates a self-signed certificate on first start and prints its SHA-256 fingerprint in the log and in the view, for example:</p>
+<pre>wss certificate fingerprint (SHA-256): 6A:52:9B:B2:36:96:47:06:FB:F0:AC:7A:EE:A2:A7:CF:49:9D:89:45:D9:1C:9B:FE:3A:51:BD:52:21:9F:67:ED</pre>
+<p>Give that string to client operators. The client pins it with <code>--fingerprint</code> (or the "TLS: pinned SHA-256" field), which proves the client reached the right server even without a CA. The alternative, <code>--insecure</code>, accepts any certificate and should only be used on a trusted test network.</p>
+
+<h3>Scanner identification</h3>
+<p>Security scanners (nmap, Nessus, Qualys and the like) must be able to identify every listening port. Anything that connects to a nettest listener without speaking the nettest protocol therefore receives a readable answer:</p>
+<table>
+<tr><th>What connects</th><th>What it receives</th></tr>
+<tr><td>An HTTP request on the TCP, ws or wss port (a browser, <code>curl</code>, an HTTP scanner)</td><td><code>HTTP/1.1 200 OK</code> with a <code>text/plain</code> body:<br><code>nettest by Slaytons Technology Services (nettest-server 1.1.0)</code></td></tr>
+<tr><td>Any other bytes, or a connection that sends nothing for 3 seconds (nmap's "null probe")</td><td>The same line without HTTP framing, then the connection is closed</td></tr>
+<tr><td>A UDP datagram that is not a nettest frame</td><td>The same line as one datagram, at most once per source address every 2 seconds and 50 per second overall, so the server cannot be abused to amplify traffic</td></tr>
+<tr><td>A TLS client on the wss port that never completes the handshake</td><td>The server certificate, which already identifies the service</td></tr>
+</table>
+<p>Real clients are not affected: the first bytes are inspected and then handed to the protocol handler unchanged. Every banner reply is logged as <code>[scan] &lt;protocol&gt; &lt;peer&gt;: banner sent</code>, which also makes scan activity visible. To check a server quickly: <code>curl http://&lt;host&gt;:9100/</code>.</p>
+
+<h3>Security notes</h3>
+<p>With a token set, unauthenticated TCP and WebSocket clients receive an error and are disconnected; unauthenticated UDP packets are silently dropped, so the server cannot be used as a traffic reflector. The banner reply is the one exception and is rate-limited as described above.</p>
+<p>A server installed as a service must have a token. Use <code>--generate-token</code> to create one and distribute it to client operators; set it on clients through <code>NETTEST_TOKEN</code> rather than on the command line where possible.</p>
+<p>The server never executes anything from a client and exposes no files; it only echoes test frames and counts bytes.</p>
+<p>Server exit codes: 0 clean shutdown, 1 interactive view error, 2 could not bind a port, 3 bad arguments or configuration.</p>
+
+<h2 id="s3" class="page">3. Server: running as a system service</h2>
+<p>For a permanent test endpoint the server installs itself as a <b>systemd unit</b> on Linux or a <b>Windows service</b>, starting at boot with fixed, pre-determined settings. All of this is done by the executable itself; no unit files or <code>sc.exe</code> commands need to be written by hand.</p>
+<pre>nettest-server service install --token &lt;secret&gt;                      # all four listeners, default ports
+nettest-server service install --generate-token --ws-port 9100 --tcp-port 0 --udp-port 0 --wss-port 0
+nettest-server service edit --idle-timeout 120 --wss-port 9102        # change settings and restart
+nettest-server service status
+nettest-server service stop | start | restart
+nettest-server service uninstall       # add --purge to delete the server's settings, certificates and logs too</pre>
+<table class="narrow">
+<tr><th>Subcommand</th><th>What it does</th></tr>
+<tr><td><code>install [settings]</code></td><td>Copies the executable to the system location, writes the settings file, registers the service to start at boot and starts it. Accepts every server switch from section 2 plus <code>--generate-token</code>, <code>--no-copy</code> (run from the current location instead of copying) and, on Windows, <code>--account</code>. Re-running <code>install</code> replaces the settings but keeps an existing token unless a new one is given.</td></tr>
+<tr><td><code>edit [settings]</code></td><td>Applies the given switches to the stored settings and restarts the service. Only the switches you give change. The token can be replaced (<code>--token</code>, <code>--generate-token</code>) but not removed.</td></tr>
+<tr><td><code>uninstall [--purge]</code></td><td>Stops and removes the service and the copied executable. <code>--purge</code> also deletes the server's settings, certificates and log files, and nothing else: a client monitor installed on the same machine (section 9) keeps its files.</td></tr>
+<tr><td><code>start</code>, <code>stop</code>, <code>restart</code></td><td>Control the installed service.</td></tr>
+<tr><td><code>status</code></td><td>Shows whether the service is installed and running, the stored settings (token masked), the wss fingerprint and where the log is. Needs no elevation.</td></tr>
+</table>
+<p><b>A token is mandatory.</b> <code>install</code> refuses to continue (exit code 3) when no token is given through <code>--token</code>, the <code>NETTEST_TOKEN</code> environment variable or <code>--generate-token</code>. A generated token is printed exactly once, marked "copy it now"; store it in your password manager and give it to client operators. <code>edit</code> accepts a new token but never an empty one, so an installed service can never be opened up by mistake.</p>
+
+<h3>Administrator rights</h3>
+<p>Every subcommand except <code>status</code> needs root or administrator rights, and the installer obtains them itself. On <b>Linux</b> it re-runs through <code>sudo</code> (or <code>pkexec</code> / <code>doas</code> when sudo is absent), so the password prompt and all output appear in the same terminal. On <b>Windows</b> it triggers the User Account Control prompt; the elevated run happens in the background and its output is shown in your window when it finishes. Declining the prompt ends the command with exit code 3. Running from an already elevated shell skips the prompt.</p>
+
+<h3>Where things live</h3>
+<table>
+<tr><th></th><th>Linux (systemd)</th><th>Windows</th></tr>
+<tr><td>Executable</td><td><code>/usr/local/bin/nettest-server</code></td><td><code>%ProgramFiles%\nettest\nettest-server.exe</code></td></tr>
+<tr><td>Settings</td><td><code>/etc/nettest/server.toml</code> (root only, mode 0600)</td><td><code>%ProgramData%\nettest\server.toml</code></td></tr>
+<tr><td>Certificates</td><td><code>/var/lib/nettest/</code></td><td><code>%ProgramData%\nettest\certs\</code></td></tr>
+<tr><td>Log</td><td><code>/var/log/nettest/server.log</code> and <code>journalctl -u nettest-server</code></td><td><code>%ProgramData%\nettest\server.log</code></td></tr>
+<tr><td>Registration</td><td><code>/etc/systemd/system/nettest-server.service</code></td><td>Service <code>nettest-server</code> ("nettest server" in Services), automatic start, depends on Tcpip</td></tr>
+<tr><td>Runs as</td><td>A dynamic system user with no shell or home (<code>DynamicUser=yes</code>), read-only system, no privilege escalation. A port below 1024 adds only the bind-privileged-port capability.</td><td><code>LocalSystem</code> by default. <code>--account "NT AUTHORITY\NetworkService"</code> selects a lower-privileged account; grant it write access to <code>%ProgramData%\nettest</code> first.</td></tr>
+</table>
+<p>The service reads only its own settings file; the per-user <code>%APPDATA%</code> / <code>~/.config</code> files play no part. Settings not given at install time use the defaults from section 2.</p>
+<p>Linux: the settings file reaches the service as a systemd <i>credential</i>, which is what lets a root-only file be read by the dynamic user. This requires systemd 247 (released 2020) or newer; every supported distribution ships a newer one. <code>systemctl stop</code> and server shutdown are graceful.</p>
+<p>Windows: the firewall rule is <b>not</b> created automatically. Allow <code>nettest-server.exe</code> inbound for the listener ports in Windows Defender Firewall (the prompt does not appear for a service). <code>%ProgramData%</code> is readable by local users; keep the token out of other locations.</p>
+<p>Upgrading: copy the new executable next to the old one and run <code>service install</code> again with no settings; it replaces the binary, keeps the stored settings and token, and restarts.</p>
+<p>Typical output of <code>service status</code>:</p>
+<pre>service     nettest-server.service: active
+config      /etc/nettest/server.toml
+bind        any
+listeners   tcp 9100  udp 9100  ws 9101  wss 9102
+token       set (32 chars)
+cert dir    /var/lib/nettest
+log file    /var/log/nettest/server.log
+idle        60 s
+banner      nettest by Slaytons Technology Services (nettest-server 1.1.0)
+wss SHA-256 6A:52:9B:B2:36:96:47:06:FB:F0:AC:7A:EE:A2:A7:CF:49:9D:89:45:D9:1C:9B:FE:3A:51:BD:52:21:9F:67:ED</pre>
+
+<h2 id="s4" class="page">4. Client: interactive terminal UI</h2>
+<p>Run <code>nettest-client</code> with no arguments, or with a target URL to pre-fill the form, for example <code>nettest-client ws://10.0.0.5:9101</code>. The client moves through three screens:</p>
+<pre>Settings  --(s)-->  Running: stats | live chart | log  --(x)-->  Summary</pre>
+<h3>Settings screen</h3>
+<p>All test settings are edited here. Text fields are edited with <kbd>Enter</kbd> (type, then <kbd>Enter</kbd> to commit or <kbd>Esc</kbd> to cancel). Toggles flip with <kbd>Enter</kbd> or <kbd>Space</kbd>; choice fields such as protocol cycle through their options. Invalid values are refused with a message on the status line. Fields that have no effect with the chosen protocol or mode (for example the token with <code>ping</code>, or the throughput fields in latency mode) are shown dimmed and their hint says so. The field reference is in <b>section 5</b>.</p>
+<h3>Running screen</h3>
+<p><b>Stats panel</b> (left): sent/received, lost with percentage, late/out-of-order/duplicate counts, in-flight probes, last RTT, min/avg/max, p50/p95/p99, jitter. Soak runs add disconnects, reconnects, uptime, longest outage and session length. Throughput runs show instantaneous and per-direction Mbit/s.</p>
+<p><b>Chart</b> (right): RTT over time as a line, with red markers along the baseline where probes were lost. In throughput mode it plots instantaneous Mbit/s. Keys <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> switch the window between the last 60 seconds, the last 5 minutes and the whole run.</p>
+<p><b>Log panel</b> (bottom): connection events, every failed probe, reconnect attempts and errors. With "Log failures only" off it also lists every successful probe.</p>
+<p><b>Header</b>: target, mode, link state (connected, disconnected, reconnecting #n; for serverless probes "disconnected" means an outage is open) and elapsed time.</p>
+<h3>Summary screen</h3>
+<p>Shown when the run ends. It lists the final statistics, connection-phase timings, stability events, and the path of the HTML report if one was written. From here you can run again with the same settings or go back to the settings screen.</p>
+<h3>Keys</h3>
+<table class="keys">
+<tr><th>Key</th><th>Screen</th><th>Action</th></tr>
+<tr><td><kbd>↑</kbd> <kbd>↓</kbd> <kbd>Tab</kbd> <kbd>Shift-Tab</kbd></td><td>Settings</td><td>Move between fields</td></tr>
+<tr><td><kbd>Enter</kbd></td><td>Settings</td><td>Edit a text field, or flip a toggle</td></tr>
+<tr><td><kbd>Space</kbd></td><td>Settings</td><td>Cycle protocol, test mode, throughput direction; flip toggles</td></tr>
+<tr><td><kbd>s</kbd> or <kbd>F5</kbd></td><td>Settings, Summary</td><td>Start the test</td></tr>
+<tr><td><kbd>w</kbd></td><td>Settings</td><td>Save settings so they are pre-filled next time</td></tr>
+<tr><td><kbd>x</kbd> <kbd>s</kbd> <kbd>Esc</kbd></td><td>Running</td><td>Stop the test (waits briefly for in-flight probes so loss is accurate)</td></tr>
+<tr><td><kbd>r</kbd></td><td>Running, Summary</td><td>Write an HTML report now, from the data collected so far</td></tr>
+<tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td><td>Running, Summary</td><td>Chart window: last 60 s, last 5 min, everything</td></tr>
+<tr><td><kbd>c</kbd></td><td>Running</td><td>Clear the log panel</td></tr>
+<tr><td><kbd>Enter</kbd> <kbd>Esc</kbd> <kbd>b</kbd></td><td>Summary</td><td>Back to the settings screen</td></tr>
+<tr><td><kbd>?</kbd></td><td>Anywhere</td><td>Help overlay (any key closes it)</td></tr>
+<tr><td><kbd>q</kbd> or <kbd>Ctrl-C</kbd></td><td>Anywhere</td><td>Quit; a running test is stopped and its report written first</td></tr>
+</table>
+
+<h2 id="s5" class="page">5. Client: settings reference</h2>
+<p>Each row is one field on the settings screen together with its command-line switch. Switches override saved settings; the saved file is <code>client.toml</code> in the configuration directory.</p>
+<table>
+<tr><th>Field</th><th>Switch</th><th>Default</th><th>Meaning</th></tr>
+<tr><td>Target host</td><td><code>--host</code> or URL</td><td>127.0.0.1</td><td>Hostname or IP of the nettest-server, or of any device for the serverless protocols. IPv6 addresses without brackets in the form; with brackets in a URL.</td></tr>
+<tr><td>Port</td><td><code>--port</code> or URL</td><td>9100</td><td>Server port for the chosen protocol; for <code>connect</code>, <code>sip</code>, <code>http</code>, <code>https</code> the device port. Not used by <code>ping</code>. A URL without a port uses the scheme's default (ws 9101, wss 9102, tcp/udp 9100, sip 5060, http 80, https 443).</td></tr>
+<tr><td>Protocol</td><td><code>-P</code>, <code>--protocol</code> or URL scheme</td><td>ws</td><td>Against nettest-server: <code>ws</code>, <code>wss</code>, <code>tcp</code>, <code>udp</code>. Against any device: <code>ping</code>, <code>connect</code>, <code>sip</code>, <code>http</code>, <code>https</code> (section 8).</td></tr>
+<tr><td>Test mode</td><td><code>-m</code>, <code>--mode</code></td><td>latency</td><td><code>latency</code>, <code>soak</code> or <code>throughput</code>. See <b>section 7</b>. Throughput needs a nettest-server; it is refused for the serverless protocols.</td></tr>
+<tr><td>Probe interval (ms)</td><td><code>-i</code>, <code>--interval</code></td><td>1000</td><td>Time between probes in latency mode. Switch accepts units: <code>200ms</code>, <code>1s</code>. Minimum 1 ms.</td></tr>
+<tr><td>Frame size (bytes)</td><td><code>-s</code>, <code>--size</code></td><td>64</td><td>Size of each probe on the wire including the 32-byte header. Keep at or below 1400 on UDP to avoid fragmentation. For <code>ping</code> it is the ICMP message size (32 to 65507); the other serverless probes ignore it.</td></tr>
+<tr><td>Duration (s)</td><td><code>-d</code>, <code>--duration</code></td><td>0</td><td>Stop after this long; 0 means run until stopped. Switch accepts <code>30s</code>, <code>5m</code>, <code>8h</code>.</td></tr>
+<tr><td>Probe count</td><td><code>-c</code>, <code>--count</code></td><td>0</td><td>Stop after this many probes; 0 means unlimited.</td></tr>
+<tr><td>Auth token</td><td><code>--token</code></td><td>(none)</td><td>Must equal the server's token when one is configured.</td></tr>
+<tr><td>TLS: accept any cert</td><td><code>--insecure</code></td><td>off</td><td>wss only. Skip certificate checking. Trusted networks only.</td></tr>
+<tr><td>TLS: pinned SHA-256</td><td><code>--fingerprint</code></td><td>(none)</td><td>wss only. The server's certificate fingerprint; colons optional. Preferred over "accept any".</td></tr>
+<tr><td>Heartbeat (ms)</td><td><code>--heartbeat</code></td><td>5000</td><td>Soak mode cadence (also the probe interval for serverless soak tests). Set below any suspected idle timeout to keep the connection alive, or above it to provoke the drop.</td></tr>
+<tr><td>Outage after N failures</td><td><code>--outage-after</code></td><td>3</td><td>Serverless soak only. This many consecutive failed or unanswered probes open an outage; the next answered probe closes it.</td></tr>
+<tr><td>Throughput seconds</td><td><code>--tp-secs</code></td><td>10</td><td>Seconds to stream in each direction.</td></tr>
+<tr><td>Throughput chunk (bytes)</td><td><code>--tp-chunk</code></td><td>65536</td><td>Bytes per throughput frame. Capped to 1368 on UDP automatically.</td></tr>
+<tr><td>Throughput direction</td><td><code>--tp-direction</code></td><td>both</td><td><code>upload</code>, <code>download</code> or <code>both</code> (upload first, then download).</td></tr>
+<tr><td>Log: CSV file</td><td><code>--csv [path]</code></td><td>off</td><td>Write a CSV log. See <b>section 10</b>.</td></tr>
+<tr><td>Log: text file</td><td><code>--text [path]</code></td><td>off</td><td>Write a plain-text log.</td></tr>
+<tr><td>Log: JSON lines</td><td><code>--jsonl [path]</code></td><td>off</td><td>Write a JSON Lines log.</td></tr>
+<tr><td>HTML report at end</td><td><code>--report [path]</code> / <code>--no-report</code></td><td>on</td><td>Write a single-file HTML report when the run ends.</td></tr>
+<tr><td>Log failures only</td><td><code>--all-samples</code> turns it off</td><td>on</td><td>When on, only failed probes are listed in the log panel, console and text log. CSV and JSONL always contain every probe.</td></tr>
+<tr><td>Output directory</td><td><code>-o</code>, <code>--out-dir</code></td><td>.</td><td>Where generated files go. Created if missing.</td></tr>
+<tr><td>(switch only)</td><td><code>--timeout</code></td><td>5s</td><td>Connect timeout per attempt.</td></tr>
+<tr><td>(switch only)</td><td><code>-4</code> / <code>-6</code></td><td>auto</td><td>Force IPv4 or IPv6 when the host name resolves to both.</td></tr>
+<tr><td>(switch only)</td><td><code>--ws-path</code>, <code>--path</code></td><td>/</td><td>Request path for WebSocket (useful behind a path-routing proxy) and for <code>http</code>/<code>https</code> probes. A path in the target URL sets it too.</td></tr>
+<tr><td>(switch only)</td><td><code>--quiet</code></td><td>off</td><td>No console sample or event lines (headless).</td></tr>
+<tr><td>(switch only)</td><td><code>--config &lt;path&gt;</code></td><td></td><td>Use a different settings file.</td></tr>
+<tr><td>(switch only)</td><td><code>--save-config</code></td><td></td><td>Save the effective settings before running.</td></tr>
+</table>
+<p>Environment variables <code>NETTEST_HOST</code>, <code>NETTEST_PORT</code>, <code>NETTEST_PROTOCOL</code> and <code>NETTEST_TOKEN</code> are also honoured, which keeps tokens out of command lines and shell history.</p>
+<h3>Target shorthand</h3>
+<p>The first positional argument sets protocol, host and port at once: <code>wss://edge.example.com:9102</code>, <code>udp://10.0.0.5:9100</code>, <code>[fd00::5]:9101</code>, or just <code>10.0.0.5</code>. Serverless targets: <code>ping://10.0.0.77</code>, <code>connect://10.0.0.77:5060</code> (the port is required), <code>sip://10.0.0.77</code>, <code>https://10.0.0.77/admin</code>. The same forms are used for targets in the monitor's configuration file (section 9). A device literally named <code>monitor</code> or <code>service</code> needs a scheme (<code>ping://monitor</code>) so it is not taken for the subcommand of the same name.</p>
+
+<h2 id="s6" class="page">6. Client: headless and scripted use</h2>
+<p>Add <code>--no-tui</code> to run without the interactive view. The client prints events to the console, writes whatever files are enabled, prints a summary at the end, and returns an exit code that scripts can act on. This is the mode for scheduled tasks, cron, remote shells and one-off checks from a script. For continuous watching with alerts, use the monitor (section 9) instead of a loop around headless runs.</p>
+<pre># Five minutes of 100 ms probes over wss, CSV + JSONL + HTML report into C:\runs
+nettest-client --no-tui wss://edge.example.com:9102 --fingerprint 6A:52:9B:... ^
+    -i 100ms -d 5m --csv --jsonl --report -o C:\runs
+# Overnight stability check: heartbeat every 5 s for 8 hours, log every disconnect and reconnect
+nettest-client --no-tui ws://10.0.0.5:9101 -m soak --heartbeat 5s -d 8h --text
+# Throughput, 10 seconds each direction
+nettest-client --no-tui tcp://10.0.0.5:9100 -m throughput --tp-secs 10
+# Scripted check: fail if loss exceeds 1% or p95 exceeds 80 ms, one JSON line on stdout
+nettest-client --no-tui udp://10.0.0.5:9100 -i 50ms -c 600 --max-loss 1 --max-p95-ms 80 ^
+    --json-summary --quiet --no-report
+# An IP phone with no server behind it: SIP OPTIONS every 10 s overnight, CSV and report
+nettest-client --no-tui sip://10.0.0.77 -m soak --heartbeat 10s -d 8h --csv --report</pre>
+<p>On Linux use <code>\</code> instead of <code>^</code> for line continuation.</p>
+<table class="narrow">
+<tr><th>Switch</th><th>Purpose</th></tr>
+<tr><td><code>--max-loss &lt;pct&gt;</code></td><td>Exit 1 if loss is above this percentage. Default 0, so any loss fails the run.</td></tr>
+<tr><td><code>--max-p95-ms &lt;ms&gt;</code></td><td>Exit 1 if the p95 round-trip time is above this value.</td></tr>
+<tr><td><code>--json-summary</code></td><td>Print the final summary as one JSON object on standard output instead of the text table. Everything else goes to standard error.</td></tr>
+<tr><td><code>--quiet</code></td><td>Suppress per-probe and event console output.</td></tr>
+<tr><td><code>--all-samples</code></td><td>Print every probe to the console, not only failures.</td></tr>
+</table>
+<h3>Exit codes</h3>
+<table class="narrow">
+<tr><th>Code</th><th>Meaning</th></tr>
+<tr><td>0</td><td>Run completed and loss and p95 were within thresholds.</td></tr>
+<tr><td>1</td><td>Run completed but loss or p95 exceeded the thresholds.</td></tr>
+<tr><td>2</td><td>Could not connect, authentication rejected, TLS failed (wrong fingerprint), or a serverless probe could not be set up (name not found, ICMP not permitted).</td></tr>
+<tr><td>3</td><td>Bad arguments, unreadable configuration, wss without <code>--insecure</code> or <code>--fingerprint</code>, or throughput mode with a serverless protocol.</td></tr>
+<tr><td>4</td><td>Could not write a log file or report.</td></tr>
+<tr><td>5</td><td>Interrupted with Ctrl-C before a bounded run (<code>-c</code> or <code>-d</code>) completed.</td></tr>
+</table>
+<p>Ending an unbounded run with Ctrl-C is normal and returns 0 or 1 according to the thresholds.</p>
+
+<h2 id="s7">7. Test modes and what they measure</h2>
+<table>
+<tr><th>Mode</th><th>What happens</th><th>What you get</th></tr>
+<tr><td><code>latency</code></td><td>The client sends numbered probes at a fixed interval; the server echoes each one back.</td><td>Round-trip time min/avg/max and p50/p95/p99, jitter, loss percentage, late replies, out-of-order and duplicate counts.</td></tr>
+<tr><td><code>soak</code></td><td>One long-lived connection with periodic heartbeats. If it drops, the client reconnects with increasing back-off and keeps going.</td><td>Every disconnect with its reason, reconnect attempts and downtime per outage, uptime percentage, longest outage, longest unbroken session, plus the same RTT statistics from the heartbeats.</td></tr>
+<tr><td><code>throughput</code></td><td>The client streams data to the server for N seconds, then the server streams back for N seconds (or one direction only).</td><td>Mbit/s, bytes and frame counts per direction. On UDP, the percentage of datagrams that never arrived.</td></tr>
+</table>
+<p><b>All modes</b> record the connection phases for every connection attempt: DNS lookup, TCP connect, TLS handshake, WebSocket upgrade and the authentication exchange, each timed separately. Phases that do not apply to the protocol are shown as a dash.</p>
+<p><b>How loss is decided.</b> A probe is counted as lost when no echo has arrived after 2 seconds or ten probe intervals, whichever is longer. If the echo turns up later it is moved from "lost" to "late", so slow links are reported as high latency rather than as loss. (The monitor uses its own per-target <code>timeout</code> instead, section 9.)</p>
+<p><b>Failed is not lost.</b> When the far end answers negatively before the timeout (TCP connection refused, ICMP host unreachable) the probe is recorded as <code>failed</code> with the reason, instead of waiting out the timeout. Failed probes are included in the loss percentage so thresholds behave the same; the summary shows the split.</p>
+<p><b>Round-trip only.</b> RTT is the time from sending a probe to receiving its echo, measured on the client's own clock. The server adds nothing from its clock, so the two machines never need synchronised time. One-way latency is therefore not reported.</p>
+
+<h2 id="s8" class="page">8. Testing devices without a server</h2>
+<p>Many stability complaints concern devices that cannot run nettest-server: desk phones, conference units, switches, access points, printers, gateways. The client tests them directly with a protocol the device already speaks. Pick the scheme in the Protocol field or the target URL; everything else (interval, duration, soak mode, logs, chart, HTML report, exit codes) works as for a nettest-server target.</p>
+<table>
+<tr><th>Scheme</th><th>What is sent</th><th>What counts as an answer</th><th>Notes</th></tr>
+<tr><td><code>ping</code></td><td>ICMP echo request, size from "Frame size" (default 64 bytes).</td><td>The matching echo reply.</td><td>No port. Unprivileged on Windows and on Linux systems that allow ping sockets (all common distributions); otherwise run as root or use <code>connect</code>. Some devices rate-limit ICMP; keep the interval at 200 ms or slower.</td></tr>
+<tr><td><code>connect</code></td><td>A TCP handshake to the given port, closed immediately with a normal FIN.</td><td>Handshake completed. "Connection refused" (host up, port closed) is reported as <code>failed</code>, distinct from a timeout (host or path down).</td><td>Port is required (<code>connect://phone:5060</code>). Works against any open TCP port, including the nettest-server ports.</td></tr>
+<tr><td><code>sip</code></td><td>A SIP <code>OPTIONS</code> request over UDP (default port 5060), the standard keep-alive that phones, PBXs and SBCs answer.</td><td>Any final SIP response (200 OK, 401, 405, 486...) whose CSeq and Call-ID match the request. The status line is kept as the sample detail.</td><td>Tests the phone's SIP stack, not just its IP. Phones that disable OPTIONS show 100% loss; use <code>connect://phone:5060</code> then. SIP over TCP is not probed.</td></tr>
+<tr><td><code>http</code> / <code>https</code></td><td>A <code>HEAD</code> request for the path (default <code>/</code>) with a <code>Host</code> header, timed to the first line of the response.</td><td>Any HTTP status line, including 401 and 404 (the web stack is up). The status line is kept as the sample detail.</td><td><code>https</code> accepts any certificate (devices use self-signed ones) unless a fingerprint is pinned. The RTT includes connect and, for https, the TLS handshake.</td></tr>
+</table>
+<h3>Stability without a connection</h3>
+<p>Serverless probes have no connection to lose, so soak mode derives stability from the probes themselves: when <b>Outage after N failures</b> (default 3) consecutive probes fail or go unanswered, an outage opens and is logged with the reason; the next answered probe closes it and the downtime is recorded. Disconnect count, uptime percentage, longest outage and longest unbroken session are then reported exactly as for a nettest-server soak, and the header shows "disconnected" while an outage is open. The heartbeat interval is the probe interval in soak mode.</p>
+<h3>What is the same, what differs</h3>
+<p>Same: RTT min/avg/max, percentiles, jitter, loss %, the live chart with loss markers, console/CSV/text/JSONL logs, the HTML report, <code>--max-loss</code> / <code>--max-p95-ms</code> thresholds and exit codes.</p>
+<p>Connection phases show only DNS (and the peer address); there is no TLS, WebSocket or authentication phase to time.</p>
+<p>A new status <code>fail</code> appears in logs and CSV for refused/unreachable answers, with the reason in the detail column. "Late" cannot occur: an answer after the timeout is discarded.</p>
+<p>On Linux an ICMP "destination unreachable" for <code>ping</code> is not delivered to unprivileged sockets, so an unreachable host appears as timeouts (as with the <code>ping</code> command). Windows reports it as failed.</p>
+<p>Throughput mode is not available: there is nothing on the far end to send or receive bulk data.</p>
+<h3>Examples</h3>
+<pre># Is the phone there, and how is the path to it? 120 pings, one every half second
+nettest-client --no-tui ping://10.0.0.77 -i 500ms -c 120
+# Is its SIP port reachable through the night? Outage after 2 missed probes
+nettest-client --no-tui connect://10.0.0.77:5060 -m soak --heartbeat 5s --outage-after 2 -d 10h --csv
+# Does the SIP stack answer, and how fast? Status lines in the CSV detail column
+nettest-client --no-tui sip://10.0.0.77 -c 60 -i 1s --csv --all-samples
+# The device's web interface, self-signed certificate accepted
+nettest-client --no-tui https://10.0.0.77/ -c 20
+# Interactive: pre-filled, then press s
+nettest-client sip://10.0.0.77</pre>
+
+<h2 id="s9" class="page">9. Client: monitoring endpoints as a service</h2>
+<p><code>nettest-client monitor</code> turns the client into an always-on watcher. It probes any number of endpoints continuously, decides when each one is <b>DOWN</b> and when it is <b>UP</b> again, and sends a message to <b>ntfy</b>, <b>Slack</b> or <b>Discord</b> on every change. Installed as a service it starts at boot and keeps going through reboots, endpoints that are down when it starts, and webhook endpoints that are temporarily unreachable. It uses exactly the probes from sections 7 and 8, so anything you can test you can monitor: a nettest-server across a WAN link, a PBX, a gateway, a printer's web interface.</p>
+<p>Typical use: one monitor per site, watching the things that site depends on, telling the on-call phone within seconds when the link to head office, the SIP trunk or the gateway stops answering, and again when it recovers, with the time it was down.</p>
+
+<h3>Workflow</h3>
+<pre>nettest-client monitor --example-config > monitor.toml      # annotated template; edit targets and webhooks
+nettest-client monitor --config monitor.toml --check        # validate, list what would be watched
+nettest-client monitor --config monitor.toml --test-notify  # one test message to every notifier
+nettest-client monitor --config monitor.toml                # run in the foreground (Ctrl-C stops it)
+nettest-client service install --from monitor.toml          # install and start the service (asks for root / UAC)
+nettest-client service status
+nettest-client service restart                              # after editing the installed monitor.toml
+nettest-client service uninstall [--purge]                  # --purge also removes monitor.toml and the log</pre>
+<p>Run <code>--check</code> and <code>--test-notify</code> before installing: the first catches typos in the file, the second proves the webhook URL, token and TLS path work from this machine. Both exit 0 on success.</p>
+
+<h3>The configuration file</h3>
+<p><code>monitor.toml</code> has one <code>[monitor]</code> section, one <code>[[targets]]</code> block per endpoint and one <code>[[notify]]</code> block per destination. Durations are written with a unit: <code>500ms</code>, <code>10s</code>, <code>2m</code>, <code>1h30m</code>; <code>"0"</code> disables a timer. A minimal file:</p>
+<pre>[[targets]]
+name = "gateway"
+target = "ping://10.0.0.1"          # any target form from section 5
+interval = "5s"
+timeout = "2s"
+failures_before_down = 3            # DOWN after 3 consecutive failures (about 15 s here)
+successes_before_up = 1             # UP on the first success
+remind_every = "1h"                 # repeat the DOWN alert hourly while still down; "0" = never
+
+[[targets]]
+name = "pbx"
+target = "sip://pbx.example.com"
+
+[[targets]]
+name = "head office nettest"
+target = "wss://edge.example.com:9102"
+token = "s3cret"
+fingerprint = "6A:52:9B:..."        # or insecure = true
+
+[[notify]]
+kind = "ntfy"                       # ntfy | slack | discord
+url = "https://ntfy.sh/my-secret-topic"
+priority = "high"
+
+[[notify]]
+kind = "slack"
+url = "https://hooks.slack.com/services/T000/B000/XXXX"</pre>
+
+<table>
+<tr><th><code>[monitor]</code> key</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>log_file</code></td><td>(stderr only)</td><td>Append the monitor log to this file. The service sets its own path (table below), so this is for foreground runs.</td></tr>
+<tr><td><code>jsonl_file</code></td><td>(off)</td><td>The same log as JSON Lines, for log collectors.</td></tr>
+<tr><td><code>summary_every</code></td><td><code>1h</code></td><td>Write one status line per target (state, how long, probes sent, loss %, p95) at this cadence. <code>"0"</code> turns it off.</td></tr>
+<tr><td><code>notify_on_start</code></td><td>false</td><td>Send a "monitor started" message when the monitor starts, so a reboot or a service restart is visible.</td></tr>
+<tr><td><code>hostname</code></td><td>(detected)</td><td>Name of this machine as it appears in alert text ("monitor on &lt;hostname&gt;").</td></tr>
+</table>
+
+<table>
+<tr><th><code>[[targets]]</code> key</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>name</code></td><td>the target</td><td>Label used in alerts and the log. Must be unique.</td></tr>
+<tr><td><code>target</code></td><td>(required)</td><td>What to watch, in the command-line form: <code>ping://host</code>, <code>connect://host:port</code>, <code>sip://host</code>, <code>http://host/path</code>, <code>https://host/</code>, <code>ws://host:9101</code>, <code>wss://host:9102</code>, <code>tcp://host:9100</code>, <code>udp://host:9100</code>.</td></tr>
+<tr><td><code>interval</code></td><td><code>10s</code></td><td>Time between probes (minimum 100 ms). For ws/wss/tcp/udp the connection stays open and a probe is sent at this cadence.</td></tr>
+<tr><td><code>timeout</code></td><td><code>5s</code></td><td>Connect timeout and probe timeout. A probe unanswered after this long counts as a failure, whatever the interval.</td></tr>
+<tr><td><code>failures_before_down</code></td><td>3</td><td>Consecutive failures that make the target DOWN.</td></tr>
+<tr><td><code>successes_before_up</code></td><td>1</td><td>Consecutive successes that make it UP again. Raise it for endpoints that answer once and die again.</td></tr>
+<tr><td><code>remind_every</code></td><td><code>0</code></td><td>Repeat the DOWN alert at this cadence while the target stays down. <code>"0"</code> sends it once.</td></tr>
+<tr><td><code>token</code>, <code>insecure</code>, <code>fingerprint</code></td><td></td><td>As for the client (section 5). A <code>wss://</code> target needs <code>insecure = true</code> or a <code>fingerprint</code>, because nettest-server certificates are self-signed.</td></tr>
+<tr><td><code>ws_path</code>, <code>ipv6</code>, <code>payload_bytes</code></td><td></td><td>WebSocket / HTTP path (a path in the target URL also works), <code>true</code>/<code>false</code> to force IPv6/IPv4, probe size (ping and nettest protocols).</td></tr>
+</table>
+
+<table>
+<tr><th><code>[[notify]]</code> key</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>kind</code></td><td>(required)</td><td><code>ntfy</code>, <code>slack</code> or <code>discord</code>.</td></tr>
+<tr><td><code>url</code></td><td>(required)</td><td>ntfy: the topic URL (<code>https://ntfy.sh/&lt;topic&gt;</code> or your own server). Slack: the incoming-webhook URL. Discord: the channel's webhook URL. Treat these URLs as secrets; anyone who has one can post to the channel.</td></tr>
+<tr><td><code>name</code></td><td>kind#n</td><td>Label in the log ("notify ops phone: delivered ...").</td></tr>
+<tr><td><code>token</code></td><td>(none)</td><td>ntfy access token for protected topics, sent as <code>Authorization: Bearer</code>.</td></tr>
+<tr><td><code>priority</code></td><td><code>high</code></td><td>ntfy priority of DOWN alerts (<code>min</code>, <code>low</code>, <code>default</code>, <code>high</code>, <code>urgent</code> or 1-5). UP alerts always use <code>default</code>.</td></tr>
+<tr><td><code>tags_down</code>, <code>tags_up</code></td><td><code>warning,red_circle</code> / <code>white_check_mark</code></td><td>ntfy tags; emoji short codes are shown as icons by the apps.</td></tr>
+<tr><td><code>insecure</code>, <code>fingerprint</code></td><td>off</td><td>For a self-hosted ntfy with a self-signed certificate: accept any certificate, or pin its SHA-256. Public endpoints are verified against the built-in root certificates and need neither.</td></tr>
+<tr><td><code>timeout</code></td><td><code>10s</code></td><td>Per-attempt timeout for the webhook request.</td></tr>
+</table>
+
+<h3>The alert rule</h3>
+<p>Every probe is a success or a failure. For <code>ws</code>, <code>wss</code>, <code>tcp</code> and <code>udp</code> a lost connection and each reconnect attempt that fails also count as failures, and a successful reconnect as a success. A target becomes <b>DOWN</b> after <code>failures_before_down</code> consecutive failures and <b>UP</b> again after <code>successes_before_up</code> consecutive successes. Anything shorter than that never produces a message, so a single dropped ping is invisible by design. The time to an alert is therefore roughly <code>failures_before_down × interval</code> plus one <code>timeout</code>: with the defaults (<code>10s</code>, <code>5s</code>, 3) a dead host is reported about 35 seconds after it stopped answering; with <code>interval = "2s"</code>, <code>timeout = "2s"</code> it is 8 seconds.</p>
+<p>An endpoint that is already down when the monitor starts is reported DOWN after the same number of failures ("already down when the monitor started" in the text). An endpoint that is healthy at start is not announced at all, so a reboot of the monitor machine does not produce a burst of "UP" messages; set <code>notify_on_start</code> if you want to hear from it. While a target stays down, <code>remind_every</code> repeats the alert with the accumulated downtime.</p>
+
+<h3>What the messages look like</h3>
+<pre>nettest: gateway DOWN
+gateway (ping://10.0.0.1) is DOWN since 2026-10-05 14:03:11 -05:00 after 3 consecutive failures:
+probe lost (no reply) — monitor on branch-pc
+
+nettest: gateway UP
+gateway (ping://10.0.0.1) is UP again at 2026-10-05 14:09:40 -05:00 after 6m29s down — monitor on branch-pc
+
+nettest: pbx still DOWN
+pbx (sip://pbx.example.com:5060) has been DOWN for 1h00m: timed out — monitor on branch-pc</pre>
+<p>The first line is the title (ntfy notification title, bold in Slack and Discord); the rest is the body. The reason is the last failure seen: "probe lost (no reply)", "connection refused", "closed by peer", "reconnect attempt 3 failed: ...". All configured notifiers receive every message. Delivery runs in its own task so a slow webhook never delays probing: three attempts per message (after 2 s and 5 s; a 429 answer is retried after the time the service asks for), a 4xx answer other than 429 is treated as permanent (a wrong URL will not fix itself), and every outcome is written to the log.</p>
+
+<h3>The log</h3>
+<p>The monitor writes one line per transition, per delivery result and (every <code>summary_every</code>) per target, so the log alone tells the story even if the webhooks were unreachable. In the foreground the log goes to the console; as a service to the file in the table below (and, on Linux, to <code>journalctl -u nettest-monitor</code>).</p>
+<pre>2026-10-05 13:09:07.816 INFO  nettest-client 1.1.0 monitor starting on branch-pc: 3 target(s), 1 notifier(s)
+2026-10-05 13:09:07.818 INFO  [gateway] up
+2026-10-05 13:09:12.219 WARN  [pbx] DOWN after 3 consecutive failures: connection refused
+2026-10-05 13:09:12.219 INFO  notify ops phone (ntfy): delivered "nettest: pbx DOWN" (200) in 143 ms
+2026-10-05 13:09:17.921 INFO  [pbx] UP again after 5s
+2026-10-05 14:09:07.817 INFO  summary gateway: UP for 1h00m  sent 720 lost 0 (0.00%)  p95 1.2 ms  last 0.9 ms</pre>
+
+<h3>Running it as a service</h3>
+<p><code>nettest-client service install --from monitor.toml</code> validates the file, copies it to the system location, copies the executable, registers the service to start at boot and starts it. The installed file is the only one the service reads; to change anything edit it there (or edit your copy and run <code>install --from</code> again) and run <code>nettest-client service restart</code>, which checks the file before restarting so a typo does not leave you without monitoring. Administrator rights are obtained exactly as for the server (section 3): <code>sudo</code> on Linux, the UAC prompt on Windows, and <code>status</code> needs none.</p>
+<table class="narrow">
+<tr><th>Subcommand</th><th>What it does</th></tr>
+<tr><td><code>install --from &lt;file&gt; [--no-copy] [--account]</code></td><td>Validate and install the configuration, copy the executable (<code>--no-copy</code> runs it from where it is), register and start. Without <code>--from</code> it re-installs with the configuration already in place (an upgrade).</td></tr>
+<tr><td><code>uninstall [--purge]</code></td><td>Stop and remove the service and the copied executable. <code>--purge</code> also deletes the installed <code>monitor.toml</code> and the log; a nettest-server installed on the same machine keeps its files.</td></tr>
+<tr><td><code>start</code>, <code>stop</code>, <code>restart</code></td><td>Control the installed service. <code>restart</code> re-reads <code>monitor.toml</code> after validating it.</td></tr>
+<tr><td><code>status</code></td><td>Whether the service is installed and running, the targets and notifiers from the installed file, and where the log is.</td></tr>
+</table>
+<table>
+<tr><th></th><th>Linux (systemd)</th><th>Windows</th></tr>
+<tr><td>Executable</td><td><code>/usr/local/bin/nettest-client</code></td><td><code>%ProgramFiles%\nettest\nettest-client.exe</code></td></tr>
+<tr><td>Settings</td><td><code>/etc/nettest/monitor.toml</code> (root only, mode 0600; it may hold tokens and webhook URLs)</td><td><code>%ProgramData%\nettest\monitor.toml</code></td></tr>
+<tr><td>Log</td><td><code>/var/log/nettest-monitor/monitor.log</code> and <code>journalctl -u nettest-monitor</code></td><td><code>%ProgramData%\nettest\monitor.log</code></td></tr>
+<tr><td>Registration</td><td><code>/etc/systemd/system/nettest-monitor.service</code></td><td>Service <code>nettest-monitor</code> ("nettest monitor" in Services), automatic start, depends on Tcpip</td></tr>
+<tr><td>Runs as</td><td>A dynamic system user with no shell or home, read-only system, no privilege escalation, plus the raw-socket capability so <code>ping://</code> works whatever the ping-socket policy.</td><td><code>LocalSystem</code> by default; <code>--account</code> as for the server.</td></tr>
+</table>
+<p>The monitor and the server can be installed on the same machine: they share <code>/etc/nettest</code> and <code>%ProgramData%\nettest</code> but no file names, and each <code>uninstall --purge</code> removes only its own files. Upgrading works as for the server: copy the new executable next to the old one and run <code>nettest-client service install</code> with no arguments.</p>
+<p>Exit codes of <code>nettest-client monitor</code>: 0 stopped by Ctrl-C or <code>systemctl stop</code>, 2 <code>--test-notify</code> could not deliver to every notifier, 3 the configuration file is missing or invalid (every problem is listed), 4 the log file cannot be written. Service subcommands: 0 ok, 2 service-manager failure, 3 usage, not supported or elevation declined.</p>
+
+<h2 id="s10" class="page">10. Exports and log files</h2>
+<p>Files are written to the output directory (default: the current directory) and named <code>nettest-&lt;YYYYMMDD-HHMMSS&gt;.&lt;ext&gt;</code>. Each switch accepts an optional explicit path instead, for example <code>--csv run1.csv</code>.</p>
+<table>
+<tr><th>Output</th><th>File</th><th>Content</th></tr>
+<tr><td>Console</td><td>screen</td><td>Headless only. One line per failed probe plus every event (connect, disconnect, reconnect, result). <code>--all-samples</code> lists every probe; <code>--quiet</code> silences it.</td></tr>
+<tr><td>CSV</td><td><code>.csv</code></td><td>One row per probe <i>and</i> per event. Columns: timestamp, elapsed seconds, kind, sequence, status (ok/lost/late/ooo/dup/fail), RTT ms, running loss %, p50, p95, p99, jitter, detail (failure reason, or the SIP/HTTP status line for serverless probes; event text for events). Opens directly in Excel.</td></tr>
+<tr><td>Text log</td><td><code>.log</code></td><td>The same lines as the console, honouring "log failures only".</td></tr>
+<tr><td>JSON Lines</td><td><code>.jsonl</code></td><td>One JSON object per probe and event, for Splunk, Elastic, Loki and similar.</td></tr>
+<tr><td>HTML report</td><td><code>.html</code></td><td>Single self-contained page: summary tiles, RTT chart with loss markers, throughput table, stability events, connection-phase table and the event log. No JavaScript and no external resources, so it opens offline and is safe to attach to a ticket or e-mail.</td></tr>
+<tr><td>Server log</td><td>any</td><td><code>--log-file</code> and <code>--jsonl</code> on the server record each client's connect, disconnect reason and per-session totals, plus every <code>[scan]</code> banner reply: the server-side half of the evidence. For a service the log is at the location in section 3.</td></tr>
+<tr><td>Monitor log</td><td><code>monitor.log</code></td><td>Every DOWN / UP transition with its reason, every webhook delivery or failure, and a periodic status line per target (section 9). <code>jsonl_file</code> gives the same as JSON Lines. The monitor writes no per-probe files.</td></tr>
+</table>
+<p>In the interactive view the HTML report is written automatically when a run ends (if the toggle is on) and can also be written at any moment with <kbd>r</kbd>. The report path is shown on the status line and the summary screen.</p>
+
+<h2 id="s11">11. Reading the results</h2>
+<table class="narrow">
+<tr><th>Figure</th><th>How to read it</th></tr>
+<tr><td>last / min / avg / max RTT</td><td>Round-trip time in milliseconds. On a LAN expect well under 1 ms; across a WAN tens of ms. Max alone is not alarming; a max far above p99 is a single spike.</td></tr>
+<tr><td>p50 / p95 / p99</td><td>Percentiles. p95 = 25 ms means 95% of probes returned within 25 ms. These describe what users feel better than the average: a path that is usually fast but stalls once a minute has a fine average and a bad p99.</td></tr>
+<tr><td>jitter</td><td>Smoothed variation between consecutive RTTs (the estimator used by VoIP). Steady 50 ms is fine for voice; 10 ms that swings by 30 ms is not.</td></tr>
+<tr><td>lost / loss %</td><td>Probes with no echo. On TCP and WebSocket this is rare because the transport retransmits; loss there shows up as RTT spikes instead. UDP shows true packet loss.</td></tr>
+<tr><td>failed</td><td>Probes answered negatively (connection refused, host unreachable). Part of the loss count. Many failures with "connection refused" mean the host is up but the service on that port is not.</td></tr>
+<tr><td>late</td><td>Echoes that arrived after the loss timeout. Many late replies mean a very slow or congested path rather than a lossy one.</td></tr>
+<tr><td>ooo / dup</td><td>Out-of-order and duplicate echoes. Common on UDP across multi-path links; on TCP they indicate something unusual in the path.</td></tr>
+<tr><td>in flight</td><td>Probes sent but not yet answered. A climbing value during a run means the path has stalled.</td></tr>
+<tr><td>Connect phases</td><td>DNS, TCP, TLS, WS upgrade, hello. Whichever is large is where the delay lives: resolver, network, certificate handling, or a proxy.</td></tr>
+<tr><td>Soak: disconnects, uptime, longest outage</td><td>How often the connection died, how long it stayed dead, and how long it stayed up. Downtime per event is in the HTML report and logs.</td></tr>
+<tr><td>Throughput Mbit/s</td><td>Payload bits per second on the wire for that direction. Compare upload with download from the same run.</td></tr>
+<tr><td>Monitor: DOWN / UP, "after 6m29s down"</td><td>The downtime in an UP message is measured from the moment the target was declared DOWN, so it is shorter than the real outage by about the detection time. The periodic summary line gives the loss % and p95 since the monitor started, for the "it is up but bad" cases an alert cannot express.</td></tr>
+</table>
+
+<h2 id="s12" class="page">12. Troubleshooting recipes</h2>
+<table>
+<tr><th>Symptom</th><th>What to run and what it tells you</th></tr>
+<tr><td>Application disconnects every few minutes</td><td>Soak over the application's protocol with the heartbeat at, say, 30 s. Disconnects at a regular interval point at a NAT, firewall or load-balancer idle timeout. Lower the heartbeat below that interval; if the drops stop, keep-alives are the fix.</td></tr>
+<tr><td>Calls or video are choppy</td><td>UDP latency test at 20 ms interval for a few minutes. Look at loss %, jitter and p99. Loss and jitter on UDP are what real-time traffic experiences.</td></tr>
+<tr><td>"The network is slow"</td><td>Latency test over TCP and over ws. Check the connect phases first: high DNS means the resolver, high TCP means the path, high TLS or WS upgrade means a middlebox or certificate issue. Then look at p95 and p99 rather than the average.</td></tr>
+<tr><td>WebSocket app fails but the website loads</td><td>Run ws and tcp tests to the same server. TCP fine and ws failing with a TCP time but no WS-upgrade time means a proxy or load balancer refuses the upgrade.</td></tr>
+<tr><td>Transfers are slow in one direction</td><td>Throughput mode with direction "both". A large asymmetry between upload and download usually means traffic shaping or a duplex mismatch.</td></tr>
+<tr><td>Loss on UDP but not on TCP</td><td>That is genuine packet loss. TCP hides it by retransmitting, which appears as RTT spikes and a high p99 in the TCP test.</td></tr>
+<tr><td>Client exits with code 2 immediately</td><td>Wrong port or protocol for the server's listener, firewall blocking the port, token mismatch, or a wss fingerprint that does not match. The console line before the summary says which.</td></tr>
+<tr><td>A phone keeps losing registration</td><td>Run <code>sip://phone -m soak --heartbeat 10s</code> from the same network segment overnight. Outages that coincide with the drops put the fault on the network or the phone; a clean run points at the PBX or the trunk, which you test with <code>connect://pbx:5060</code> or a nettest-server next to the PBX.</td></tr>
+<tr><td>Devices on a switch "disappear" briefly</td><td><code>ping://device -m soak --heartbeat 1s --outage-after 3</code> against two or three devices on that switch at once. Simultaneous outages are the switch or its uplink; a single device alone is that device.</td></tr>
+<tr><td>"Tell me when the branch loses the head office"</td><td>Install the monitor (section 9) on a machine at the branch with <code>ping://</code> or <code>connect://</code> targets for the head-office gateway and a <code>wss://</code> target for a nettest-server there, plus an ntfy topic on the on-call phone. The DOWN message arrives seconds after the link dies, the UP message says how long it was gone.</td></tr>
+<tr><td>Monitor alerts never arrive</td><td><code>nettest-client monitor --config monitor.toml --test-notify</code> on the monitor machine. The log line says exactly what the webhook answered: a 404 or "no_service" is a wrong URL, a 401/403 a bad token, "timed out" a firewall or proxy between the machine and the endpoint, a TLS error a self-hosted ntfy without <code>insecure</code> or <code>fingerprint</code>. As a service, read the monitor log: every delivery attempt is recorded there.</td></tr>
+<tr><td>Monitor alerts too often for a flaky but working endpoint</td><td>Raise <code>failures_before_down</code> or lengthen <code>interval</code> so a single lost probe cannot trigger; raise <code>successes_before_up</code> so one lucky reply does not end an outage. Use <code>remind_every</code> instead of a short interval if you only want to be nagged while it stays down.</td></tr>
+<tr><td>A <code>ping://</code> target is always DOWN in the monitor but <code>nettest-client ping://</code> works</td><td>Run the monitor in the foreground as the same user: the log's first lines say why probing cannot start. On Linux the installed service already has the raw-socket capability; on an older kernel or a hardened sysctl use <code>connect://</code> to a known port instead.</td></tr>
+<tr><td><code>ping://</code> reports ICMP not permitted</td><td>Linux only: the account's group is outside <code>net.ipv4.ping_group_range</code>. Run as root, widen the range, or use <code>connect://host:port</code>.</td></tr>
+<tr><td>A vulnerability scan flags an unknown service on 9100-9102</td><td>That is nettest-server; open <code>http://host:9100/</code> in a browser to see the identification banner. The text is configurable with <code>--banner</code> if the scanner needs a particular string.</td></tr>
+<tr><td>Need evidence for a carrier or vendor</td><td>Run headless with <code>--csv --report</code> for the agreed period and attach the HTML report; it contains the chart, every event, and the per-phase timings in one file. For an outage history over weeks, the monitor log lists every DOWN and UP with timestamps and durations.</td></tr>
+</table>
+
+<h2 id="s13" class="page">13. Quick reference card</h2>
+<h3>Server</h3>
+<pre>nettest-server                                                          # interactive view, default ports
+nettest-server --no-tui --token &lt;secret&gt; --log-file server.log          # console logging, token required
+nettest-server --bind &lt;ip&gt; --ws-port 9100 --tcp-port 0 --udp-port 0 --wss-port 0   # one listener only
+nettest-server --save-config                                            # make current switches the defaults
+nettest-server service install --generate-token [--ws-port N ...]       # permanent service (token required)
+nettest-server service edit --idle-timeout 120                          # change a setting, restart
+nettest-server service status | start | stop | restart | uninstall      # manage it</pre>
+<p>Default ports: tcp 9100, udp 9100, ws 9101, wss 9102. Port 0 disables a listener. Every port answers scanners with the banner.</p>
+<h3>Client</h3>
+<pre>nettest-client ws://&lt;host&gt;:9101                                        # interactive, pre-filled target
+nettest-client --no-tui tcp://&lt;host&gt;:9100 -i 200ms -c 300 --csv         # 300 probes, CSV + HTML report
+nettest-client --no-tui ws://&lt;host&gt;:9101 -m soak --heartbeat 5s -d 8h   # overnight stability
+nettest-client --no-tui tcp://&lt;host&gt;:9100 -m throughput --tp-secs 10    # bandwidth both directions
+nettest-client --no-tui wss://&lt;host&gt;:9102 --fingerprint &lt;sha256&gt;        # TLS with pinned certificate
+nettest-client --no-tui ping://&lt;device&gt; -c 100                          # no server: ICMP
+nettest-client --no-tui sip://&lt;phone&gt; -m soak --heartbeat 10s -d 8h     # no server: SIP OPTIONS stability
+nettest-client --no-tui connect://&lt;device&gt;:&lt;port&gt; -m soak               # no server: TCP port reachability</pre>
+<h3>Monitor</h3>
+<pre>nettest-client monitor --example-config &gt; monitor.toml                 # template with every key explained
+nettest-client monitor --config monitor.toml --check                    # validate
+nettest-client monitor --config monitor.toml --test-notify              # test the webhooks
+nettest-client monitor --config monitor.toml                            # foreground
+nettest-client service install --from monitor.toml                      # permanent service
+nettest-client service status | restart | stop | start | uninstall      # manage it</pre>
+<p>Alert rule: DOWN after <code>failures_before_down</code> (3) consecutive failures, UP after <code>successes_before_up</code> (1) successes, optional <code>remind_every</code>. Notifiers: <code>ntfy</code>, <code>slack</code>, <code>discord</code>.</p>
+<table style="width:auto; display:inline-table; margin-right:24pt; vertical-align:top" class="keys">
+<tr><th colspan="2">Interactive keys</th></tr>
+<tr><td><kbd>s</kbd></td><td>start / run again</td></tr>
+<tr><td><kbd>x</kbd></td><td>stop</td></tr>
+<tr><td><kbd>r</kbd></td><td>write HTML report</td></tr>
+<tr><td><kbd>w</kbd></td><td>save settings</td></tr>
+<tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td><td>chart window 60 s / 5 min / all</td></tr>
+<tr><td><kbd>c</kbd></td><td>clear log</td></tr>
+<tr><td><kbd>?</kbd></td><td>help</td></tr>
+<tr><td><kbd>q</kbd></td><td>quit</td></tr>
+</table>
+<table style="width:auto; display:inline-table; vertical-align:top">
+<tr><th colspan="2">Exit codes</th></tr>
+<tr><td>0</td><td>ok</td></tr>
+<tr><td>1</td><td>thresholds exceeded</td></tr>
+<tr><td>2</td><td>connect / auth / TLS / webhook test failed</td></tr>
+<tr><td>3</td><td>usage / configuration</td></tr>
+<tr><td>4</td><td>file write failed</td></tr>
+<tr><td>5</td><td>interrupted</td></tr>
+</table>
+<h3>Files</h3>
+<p>Settings: <code>%APPDATA%\nettest\</code> or <code>~/.config/nettest/</code><br>
+Server service: <code>%ProgramData%\nettest\</code> or <code>/etc/nettest/server.toml</code>, <code>/var/lib/nettest/</code>, <code>/var/log/nettest/</code><br>
+Monitor service: <code>%ProgramData%\nettest\monitor.toml</code> or <code>/etc/nettest/monitor.toml</code>, <code>/var/log/nettest-monitor/</code><br>
+Outputs: <code>nettest-&lt;timestamp&gt;.csv / .log / .jsonl / .html</code></p>
+
+<p class="footer">nettest Administrator Guide · Slaytons Technology Services · 2026-10-05 · revision 3 (version 1.1.0)</p>
+</body>
+</html>

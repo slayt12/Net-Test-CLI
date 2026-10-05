@@ -123,4 +123,6 @@ nobody has to rediscover them.
   (and the version strings in README.md and the admin guide) before tagging. For a tag that
   predates the workflow, use "Run workflow" in the Actions tab with the tag name. `target/` and
   `dist/` are ignored; `releases/<version>/` holds bare binaries committed as a fallback download
-  (the exception in `.gitignore`). The admin guide HTML source is not in the repo.
+  (the exception in `.gitignore`). The admin guide source is `docs/nettest-admin-guide.html`; render it with the
+  chromium command in its header comment (`--generate-pdf-document-outline` gives the PDF its
+  bookmarks) and keep its version line, banner text and footer in step with the version.
