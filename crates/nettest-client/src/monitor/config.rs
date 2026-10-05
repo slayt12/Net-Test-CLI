@@ -210,9 +210,41 @@ pub fn load(path: &Path) -> Result<MonitorConfig, String> {
             path.display()
         ));
     }
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let text = read_text(path)?;
     parse_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Read a config file written by any common tool: UTF-8 with or without a byte-order mark, or
+/// UTF-16 with one. Windows PowerShell 5.1 writes `>` redirections as UTF-16 LE, so
+/// `nettest-client monitor --example-config > monitor.toml` would otherwise be unreadable.
+pub fn read_text(path: &Path) -> Result<String, String> {
+    let bytes =
+        std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    decode_text(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+pub fn decode_text(bytes: &[u8]) -> Result<String, String> {
+    let utf16 = |le: bool| -> Result<String, String> {
+        let body = &bytes[2..];
+        if body.len() % 2 != 0 {
+            return Err("UTF-16 file has an odd number of bytes".into());
+        }
+        let units: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })
+            .collect();
+        String::from_utf16(&units).map_err(|_| "UTF-16 file contains invalid characters".into())
+    };
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        return utf16(true);
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        return utf16(false);
+    }
+    let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    String::from_utf8(body.to_vec()).map_err(|_| {
+        "not valid UTF-8 (or UTF-16 with a byte-order mark); save the file as UTF-8, e.g. in PowerShell `(Get-Content monitor.toml) | Set-Content -Encoding utf8 monitor.toml`".into()
+    })
 }
 
 pub fn parse_str(text: &str) -> Result<MonitorConfig, String> {
@@ -642,6 +674,29 @@ url = "hooks.slack.com/x"
         assert_eq!(r.targets[0].thresholds, Thresholds::default());
         assert_eq!(r.warnings.len(), 1, "warns about the missing notifiers");
         assert!(resolve(&MonitorConfig::default()).is_err());
+    }
+
+    #[test]
+    fn text_encodings() {
+        let toml = "[[targets]]\ntarget = \"ping://10.0.0.1\"\n";
+        assert_eq!(decode_text(toml.as_bytes()).unwrap(), toml);
+        let mut bom8 = vec![0xEF, 0xBB, 0xBF];
+        bom8.extend_from_slice(toml.as_bytes());
+        assert_eq!(decode_text(&bom8).unwrap(), toml);
+        // What Windows PowerShell 5.1 writes for `--example-config > monitor.toml`.
+        let mut le = vec![0xFF, 0xFE];
+        for u in toml.encode_utf16() {
+            le.extend_from_slice(&u.to_le_bytes());
+        }
+        assert_eq!(decode_text(&le).unwrap(), toml);
+        let mut be = vec![0xFE, 0xFF];
+        for u in toml.encode_utf16() {
+            be.extend_from_slice(&u.to_be_bytes());
+        }
+        assert_eq!(decode_text(&be).unwrap(), toml);
+        let err = decode_text(&[0xC3, 0x28, b'x']).unwrap_err();
+        assert!(err.contains("Set-Content"), "{err}");
+        assert!(decode_text(&[0xFF, 0xFE, 0x41]).is_err());
     }
 
     #[test]

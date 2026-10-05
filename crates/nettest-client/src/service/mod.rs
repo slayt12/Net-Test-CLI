@@ -124,8 +124,8 @@ pub fn dispatch(args: ServiceArgs) -> ExitCode {
 
 // ---- helpers shared by the platform backends ---------------------------------------------
 
-/// Validate the config to install (`--from`, or the one already in place) and copy it,
-/// byte for byte, to the system location with private permissions.
+/// Validate the config to install (`--from`, or the one already in place) and copy it, as
+/// UTF-8 with comments intact, to the system location with private permissions.
 pub(crate) fn stage_config(
     from: Option<&Path>,
     paths: &ServicePaths,
@@ -141,8 +141,8 @@ pub(crate) fn stage_config(
             )));
         }
     };
-    let text = std::fs::read_to_string(&source)
-        .map_err(|e| ServiceError::usage(format!("cannot read {}: {e}", source.display())))?;
+    // Decodes UTF-16 from PowerShell redirections; the installed copy is always UTF-8.
+    let text = config::read_text(&source).map_err(ServiceError::usage)?;
     let cfg = config::parse_str(&text)
         .map_err(|e| ServiceError::usage(format!("{}: {e}", source.display())))?;
     let resolved = config::resolve(&cfg).map_err(|errs| {
@@ -248,6 +248,13 @@ mod tests {
         std::fs::write(&good, "# keep me\n[[targets]]\ntarget = \"ping://10.0.0.1\"\n").unwrap();
         let r = stage_config(Some(&good), &paths, &mut out).unwrap();
         assert_eq!(r.targets.len(), 1);
+        let utf16 = dir.join("utf16.toml");
+        let mut bytes = vec![0xFF, 0xFE];
+        for u in "# keep me\n[[targets]]\ntarget = \"ping://10.0.0.1\"\n".encode_utf16() {
+            bytes.extend_from_slice(&u.to_le_bytes());
+        }
+        std::fs::write(&utf16, bytes).unwrap();
+        stage_config(Some(&utf16), &paths, &mut out).unwrap();
         assert_eq!(std::fs::read_to_string(&paths.config).unwrap(), "# keep me\n[[targets]]\ntarget = \"ping://10.0.0.1\"\n");
         let r2 = stage_config(None, &paths, &mut out).unwrap();
         assert_eq!(r2.targets[0].name, "ping://10.0.0.1");

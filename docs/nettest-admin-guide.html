@@ -359,7 +359,7 @@ nettest-client service install --from monitor.toml          # install and start 
 nettest-client service status
 nettest-client service restart                              # after editing the installed monitor.toml
 nettest-client service uninstall [--purge]                  # --purge also removes monitor.toml and the log</pre>
-<p>Run <code>--check</code> and <code>--test-notify</code> before installing: the first catches typos in the file, the second proves the webhook URL, token and TLS path work from this machine. Both exit 0 on success.</p>
+<p>The file may be UTF-8 or UTF-16 (which is what Windows PowerShell's <code>&gt;</code> redirection writes); both are read, and the installed copy is always UTF-8. Run <code>--check</code> and <code>--test-notify</code> before installing: the first catches typos in the file, the second proves the webhook URL, token and TLS path work from this machine. Both exit 0 on success.</p>
 
 <h3>The configuration file</h3>
 <p><code>monitor.toml</code> has one <code>[monitor]</code> section, one <code>[[targets]]</code> block per endpoint and one <code>[[notify]]</code> block per destination. Durations are written with a unit: <code>500ms</code>, <code>10s</code>, <code>2m</code>, <code>1h30m</code>; <code>"0"</code> disables a timer. A minimal file:</p>

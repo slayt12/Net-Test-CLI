@@ -283,7 +283,7 @@ nettest-client service status | restart | stop | start
 nettest-client service uninstall [--purge]                 # --purge also removes monitor.toml and the log
 ```
 
-A minimal `monitor.toml`:
+A minimal `monitor.toml` (UTF-8, or UTF-16 as Windows PowerShell's `>` writes it; both are read):
 
 ```toml
 [[targets]]
