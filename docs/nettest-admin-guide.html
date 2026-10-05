@@ -50,7 +50,7 @@
   <div>
     <h1>nettest Administrator Guide</h1>
     <p class="subtitle">Network path troubleshooting with the nettest client and server</p>
-    <p class="meta">Version 1.1.0 · Covers Windows 11 and Linux · October 2026 (revision 3: endpoint monitoring service with ntfy / Slack / Discord alerts)</p>
+    <p class="meta">Version 1.1.1 · Covers Windows 11 and Linux · October 2026 (revision 3: endpoint monitoring service with ntfy / Slack / Discord alerts)</p>
   </div>
 </div>
 
@@ -144,7 +144,7 @@ nettest-server --bind 172.16.89.25 --ws-port 9100 --tcp-port 0 --udp-port 0 --ws
 <p>Security scanners (nmap, Nessus, Qualys and the like) must be able to identify every listening port. Anything that connects to a nettest listener without speaking the nettest protocol therefore receives a readable answer:</p>
 <table>
 <tr><th>What connects</th><th>What it receives</th></tr>
-<tr><td>An HTTP request on the TCP, ws or wss port (a browser, <code>curl</code>, an HTTP scanner)</td><td><code>HTTP/1.1 200 OK</code> with a <code>text/plain</code> body:<br><code>nettest by Slaytons Technology Services (nettest-server 1.1.0)</code></td></tr>
+<tr><td>An HTTP request on the TCP, ws or wss port (a browser, <code>curl</code>, an HTTP scanner)</td><td><code>HTTP/1.1 200 OK</code> with a <code>text/plain</code> body:<br><code>nettest by Slaytons Technology Services (nettest-server 1.1.1)</code></td></tr>
 <tr><td>Any other bytes, or a connection that sends nothing for 3 seconds (nmap's "null probe")</td><td>The same line without HTTP framing, then the connection is closed</td></tr>
 <tr><td>A UDP datagram that is not a nettest frame</td><td>The same line as one datagram, at most once per source address every 2 seconds and 50 per second overall, so the server cannot be abused to amplify traffic</td></tr>
 <tr><td>A TLS client on the wss port that never completes the handshake</td><td>The server certificate, which already identifies the service</td></tr>
@@ -201,7 +201,7 @@ token       set (32 chars)
 cert dir    /var/lib/nettest
 log file    /var/log/nettest/server.log
 idle        60 s
-banner      nettest by Slaytons Technology Services (nettest-server 1.1.0)
+banner      nettest by Slaytons Technology Services (nettest-server 1.1.1)
 wss SHA-256 6A:52:9B:B2:36:96:47:06:FB:F0:AC:7A:EE:A2:A7:CF:49:9D:89:45:D9:1C:9B:FE:3A:51:BD:52:21:9F:67:ED</pre>
 
 <h2 id="s4" class="page">4. Client: interactive terminal UI</h2>
@@ -443,7 +443,7 @@ pbx (sip://pbx.example.com:5060) has been DOWN for 1h00m: timed out — monitor 
 
 <h3>The log</h3>
 <p>The monitor writes one line per transition, per delivery result and (every <code>summary_every</code>) per target, so the log alone tells the story even if the webhooks were unreachable. In the foreground the log goes to the console; as a service to the file in the table below (and, on Linux, to <code>journalctl -u nettest-monitor</code>).</p>
-<pre>2026-10-05 13:09:07.816 INFO  nettest-client 1.1.0 monitor starting on branch-pc: 3 target(s), 1 notifier(s)
+<pre>2026-10-05 13:09:07.816 INFO  nettest-client 1.1.1 monitor starting on branch-pc: 3 target(s), 1 notifier(s)
 2026-10-05 13:09:07.818 INFO  [gateway] up
 2026-10-05 13:09:12.219 WARN  [pbx] DOWN after 3 consecutive failures: connection refused
 2026-10-05 13:09:12.219 INFO  notify ops phone (ntfy): delivered "nettest: pbx DOWN" (200) in 143 ms
@@ -575,6 +575,6 @@ Server service: <code>%ProgramData%\nettest\</code> or <code>/etc/nettest/server
 Monitor service: <code>%ProgramData%\nettest\monitor.toml</code> or <code>/etc/nettest/monitor.toml</code>, <code>/var/log/nettest-monitor/</code><br>
 Outputs: <code>nettest-&lt;timestamp&gt;.csv / .log / .jsonl / .html</code></p>
 
-<p class="footer">nettest Administrator Guide · Slaytons Technology Services · 2026-10-05 · revision 3 (version 1.1.0)</p>
+<p class="footer">nettest Administrator Guide · Slaytons Technology Services · 2026-10-05 · revision 3 (version 1.1.1)</p>
 </body>
 </html>

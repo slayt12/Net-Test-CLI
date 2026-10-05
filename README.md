@@ -28,7 +28,7 @@ troubleshooting recipes: [nettest-admin-guide.pdf](nettest-admin-guide.pdf).
 
 Ready-to-run packages for every version are on the
 **[Releases page](https://github.com/slayt12/Net-Test-CLI/releases)**. Nothing to install: unpack,
-copy the file where you need it, run it. Current version **1.1.0**.
+copy the file where you need it, run it. Current version **1.1.1**.
 
 | Asset | Contents |
 |---|---|
@@ -380,7 +380,7 @@ nettest-server service install|edit|uninstall|start|stop|restart|status [...]
   and wss ports an HTTP request receives `HTTP/1.1 200` with a `text/plain` body, any other bytes
   (or silence for 3 s) receive the bare line, and a non-nettest UDP datagram receives the same
   line (at most one reply per source IP every 2 s and 50 per second overall, so the server cannot
-  amplify traffic). The text is `nettest by Slaytons Technology Services (nettest-server 1.1.0)`;
+  amplify traffic). The text is `nettest by Slaytons Technology Services (nettest-server 1.1.1)`;
   `--banner` changes the first part. Real clients are unaffected: the first bytes are classified
   and replayed into the protocol handler. Each banner reply is logged as `[scan] <proto> <peer>`.
 * The TUI shows listeners, the wss fingerprint, and a live client table (protocol, peer,
