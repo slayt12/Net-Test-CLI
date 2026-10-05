@@ -145,6 +145,17 @@ async fn wrong_fingerprint_fails_tls() {
     server.shutdown();
 }
 
+/// The monitor's webhook mode must never accept a nettest-server's self-signed certificate.
+#[tokio::test]
+async fn webpki_rejects_self_signed() {
+    let server = spawn("").await;
+    let mut o = opts(&server, Protocol::Wss, None);
+    o.tls = Some(TlsClientMode::WebPki);
+    let err = dial(&o).await.err().expect("tls must fail");
+    assert!(matches!(err, DialError::Tls(_)), "{err}");
+    server.shutdown();
+}
+
 #[tokio::test]
 async fn throughput_upload_and_download_tcp() {
     let server = spawn("").await;

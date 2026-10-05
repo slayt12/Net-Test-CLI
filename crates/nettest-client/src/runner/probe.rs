@@ -27,9 +27,10 @@ pub async fn run(r: &mut Runner) -> (RunSummary, StopReason, Vec<ChartPoint>) {
     } else {
         r.cfg.interval_ms.max(1)
     });
-    let policy = LossPolicy::for_interval(interval);
+    let policy = LossPolicy::resolve(interval, r.cfg.loss_timeout_ms);
+    let loss_override = r.cfg.loss_timeout_ms;
     let mut tracker = LatencyTracker::new(policy, 4096);
-    let mut soak_log = SoakLog::new();
+    let mut soak_log = SoakLog::with_capacity(r.history_limit().max(64));
     let deadline = (r.cfg.duration_secs > 0)
         .then(|| Instant::now() + Duration::from_secs(r.cfg.duration_secs));
     let max_count = r.cfg.count;
@@ -79,7 +80,7 @@ pub async fn run(r: &mut Runner) -> (RunSummary, StopReason, Vec<ChartPoint>) {
             && Instant::now() >= d
             && draining_until.is_none()
         {
-            draining_until = Some(Instant::now() + policy_timeout(interval));
+            draining_until = Some(Instant::now() + policy_timeout(interval, loss_override));
         }
         if let Some(until) = draining_until
             && (Instant::now() >= until || inflight.is_empty())
@@ -96,7 +97,7 @@ pub async fn run(r: &mut Runner) -> (RunSummary, StopReason, Vec<ChartPoint>) {
 
             _ = tick.tick(), if draining_until.is_none() => {
                 if max_count > 0 && seq >= max_count {
-                    draining_until = Some(Instant::now() + policy_timeout(interval));
+                    draining_until = Some(Instant::now() + policy_timeout(interval, loss_override));
                     continue;
                 }
                 seq += 1;

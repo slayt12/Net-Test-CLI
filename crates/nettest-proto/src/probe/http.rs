@@ -134,10 +134,22 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
 
 /// `HTTP/1.1 200 OK` -> the line; anything else -> `None`.
 pub fn parse_status(line: &str) -> Option<String> {
+    parse_status_code(line).map(|_| line.to_string())
+}
+
+/// `HTTP/1.1 404 Not Found` -> `(404, "Not Found")`; anything that is not an HTTP/1.x status
+/// line -> `None`.
+pub fn parse_status_code(line: &str) -> Option<(u16, String)> {
     let rest = line.strip_prefix("HTTP/1.")?;
     let (_ver, rest) = rest.split_once(' ')?;
-    let code = rest.split(' ').next()?;
-    (code.len() == 3 && code.bytes().all(|b| b.is_ascii_digit())).then(|| line.to_string())
+    let (code, reason) = match rest.split_once(' ') {
+        Some((c, r)) => (c, r.trim()),
+        None => (rest, ""),
+    };
+    if code.len() != 3 || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((code.parse().ok()?, reason.to_string()))
 }
 
 #[cfg(test)]
@@ -156,5 +168,10 @@ mod tests {
         );
         assert!(parse_status("SIP/2.0 200 OK").is_none());
         assert!(parse_status("HTTP/1.1 twohundred").is_none());
+        assert_eq!(
+            super::parse_status_code("HTTP/1.1 404 Not Found"),
+            Some((404, "Not Found".to_string()))
+        );
+        assert_eq!(super::parse_status_code("HTTP/1.0 204"), Some((204, String::new())));
     }
 }

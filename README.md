@@ -3,7 +3,9 @@
 **Network path troubleshooting from a terminal.** Two small, dependency-free binaries for
 Windows 11 and Linux that measure round-trip latency, loss, jitter, connection stability and
 throughput over WebSocket, TCP and UDP, and probe devices that cannot run software (IP phones,
-switches, gateways) with ping, TCP connect, SIP OPTIONS and HTTP.
+switches, gateways) with ping, TCP connect, SIP OPTIONS and HTTP. The client also runs as a
+**monitoring service** that watches any number of endpoints and sends ntfy, Slack or Discord
+alerts when one goes down or comes back.
 
 [![Release](https://img.shields.io/github/v/release/slayt12/Net-Test-CLI?label=release)](https://github.com/slayt12/Net-Test-CLI/releases)
 [![Release build](https://github.com/slayt12/Net-Test-CLI/actions/workflows/release.yml/badge.svg)](https://github.com/slayt12/Net-Test-CLI/actions/workflows/release.yml)
@@ -12,7 +14,8 @@ switches, gateways) with ping, TCP connect, SIP OPTIONS and HTTP.
 ![Rust](https://img.shields.io/badge/rust-2024%20edition-orange)
 
 **Contents:** [Download](#download) · [Quick start](#quick-start) · [Client](#client) ·
-[Server](#server) · [Running as a service](#running-the-server-as-a-service) ·
+[Monitoring as a service](#monitoring-as-a-service) · [Server](#server) ·
+[Server as a service](#running-the-server-as-a-service) ·
 [Wire format](#wire-format) · [Building](#building) · [Layout](#layout) ·
 [Troubleshooting](#troubleshooting-with-it) · [License](#license-and-support)
 
@@ -25,7 +28,7 @@ troubleshooting recipes: [nettest-admin-guide.pdf](nettest-admin-guide.pdf).
 
 Ready-to-run packages for every version are on the
 **[Releases page](https://github.com/slayt12/Net-Test-CLI/releases)**. Nothing to install: unpack,
-copy the file where you need it, run it. Current version **1.0.0**.
+copy the file where you need it, run it. Current version **1.1.0**.
 
 | Asset | Contents |
 |---|---|
@@ -68,7 +71,9 @@ producing the same statistics, live chart and reports.
 ```
 nettest-server          runs on the far end: echoes probes, counts throughput, logs clients;
                         installs itself as a systemd unit or Windows service
-nettest-client          interactive TUI with live chart, or headless for scripts and cron
+nettest-client          interactive TUI with live chart, or headless for scripts and cron;
+                        `monitor` watches endpoints and alerts via ntfy / Slack / Discord,
+                        installable as a systemd unit or Windows service
 ```
 
 Why another tool: `ping` needs ICMP (often filtered, needs admin for raw sockets), `iperf` does
@@ -95,6 +100,8 @@ nettest-client                                  # interactive settings form, the
 nettest-client ws://10.0.0.5:9101               # same, pre-filled from the URL
 nettest-client --no-tui tcp://10.0.0.5:9100 -i 200ms -c 300 --csv --report
 nettest-client --no-tui sip://10.0.0.77 -m soak -d 8h --csv   # an IP phone, no server needed
+nettest-client monitor --example-config > monitor.toml           # then edit targets + webhooks
+nettest-client service install --from monitor.toml              # alert on DOWN / UP, forever
 ```
 
 First run of the server with wss enabled generates a self-signed certificate and prints its
@@ -258,6 +265,101 @@ default. `--config <path>` points at a different file.
 
 ---
 
+### Monitoring as a service
+
+`nettest-client monitor` watches any number of endpoints for as long as it runs and sends a
+webhook when one goes **DOWN** or comes back **UP**. It uses the same probes as the tests above
+(ping, connect, sip, http/https against any device; ws/wss/tcp/udp against a nettest-server), so
+anything you can test you can monitor. Installed as a service it starts at boot and survives
+reboots, targets that are down at start, and webhook endpoints that are temporarily unreachable.
+
+```sh
+nettest-client monitor --example-config > monitor.toml     # annotated template, edit it
+nettest-client monitor --config monitor.toml --check       # validate, show what would be watched
+nettest-client monitor --config monitor.toml --test-notify # send a test message to every notifier
+nettest-client monitor --config monitor.toml               # run in the foreground (Ctrl-C / SIGTERM stops)
+nettest-client service install --from monitor.toml         # install + start the service (asks for root / UAC)
+nettest-client service status | restart | stop | start
+nettest-client service uninstall [--purge]                 # --purge also removes monitor.toml and the log
+```
+
+A minimal `monitor.toml`:
+
+```toml
+[[targets]]
+name = "gateway"
+target = "ping://10.0.0.1"          # any target form the CLI accepts
+interval = "5s"
+timeout = "2s"
+failures_before_down = 3            # DOWN after 3 consecutive failures (≈ 15 s here)
+successes_before_up = 1             # UP on the first success
+remind_every = "1h"                 # re-send the DOWN alert hourly while still down ("0" = never)
+
+[[targets]]
+name = "pbx"
+target = "sip://pbx.example.com"
+
+[[targets]]
+name = "edge nettest"
+target = "wss://edge.example.com:9102"
+token = "s3cret"
+fingerprint = "6A:52:..."           # or insecure = true
+
+[[notify]]
+kind = "ntfy"                       # ntfy | slack | discord
+url = "https://ntfy.sh/my-secret-topic"
+# token = "tk_..."                  # ntfy access token
+priority = "high"                   # ntfy priority of DOWN alerts; UP alerts use "default"
+
+[[notify]]
+kind = "slack"
+url = "https://hooks.slack.com/services/T000/B000/XXXX"
+
+[[notify]]
+kind = "discord"
+url = "https://discord.com/api/webhooks/123456/abcdef"
+```
+
+* **Alert rule.** Every probe (or, for ws/wss/tcp/udp, every echo, disconnect and failed
+  reconnect) is a success or a failure. A target becomes DOWN after `failures_before_down`
+  consecutive failures and UP again after `successes_before_up` consecutive successes; shorter
+  blips never alert. `timeout` is also the loss timeout, so with `interval = "5s"` and
+  `timeout = "2s"` a dead host is reported after about 15 s. A target that is already down when
+  the monitor starts is reported DOWN after the same number of failures.
+* **Notifiers.** All configured notifiers receive every alert. ntfy gets a text message with
+  `Title`, `Priority` and `Tags` headers (and `Authorization: Bearer` when `token` is set);
+  Slack and Discord get their JSON webhook payload. Delivery runs in its own task with three
+  attempts (2 s, 5 s, `Retry-After` on 429); a webhook that fails is logged, never retried
+  forever, and never delays probing. `notify_on_start = true` in `[monitor]` sends a message at
+  startup so you know the chain works; `--test-notify` does the same on demand.
+* **TLS.** Webhook HTTPS is verified against the Mozilla root bundle (public ntfy.sh, Slack and
+  Discord just work). For a self-hosted ntfy with a self-signed certificate set `insecure = true`
+  or pin it with `fingerprint = "<sha256>"` on that notifier. Plain `http://` is accepted for a
+  LAN ntfy. Monitored `wss://` targets still need `insecure` or `fingerprint`, like the CLI.
+* **Log.** Every transition, every delivery result and (every `summary_every`, default 1 h) a
+  per-target status line with loss % and p95 go to the log; in the foreground to stderr, as a
+  service to the file below (`--log-file` or `[monitor].log_file`).
+* **Editing.** The installed file is the one the service reads; after changing it run
+  `nettest-client service restart` (which validates it first) or `service install --from` again.
+  A device literally named `monitor` or `service` needs a scheme on the command line
+  (`nettest-client ping://monitor`) so it is not taken for the subcommand.
+
+| | Linux (systemd) | Windows (SCM) |
+|---|---|---|
+| executable | `/usr/local/bin/nettest-client` (copied; `--no-copy` keeps the current path) | `%ProgramFiles%\nettest\nettest-client.exe` |
+| settings | `/etc/nettest/monitor.toml`, mode 0600 (may hold tokens) | `%ProgramData%\nettest\monitor.toml` |
+| log | `/var/log/nettest-monitor/monitor.log` plus `journalctl -u nettest-monitor` | `%ProgramData%\nettest\monitor.log` |
+| unit / name | `/etc/systemd/system/nettest-monitor.service` | service `nettest-monitor`, display "nettest monitor" |
+| account | `DynamicUser=yes`, `ProtectSystem=strict`, `NoNewPrivileges`, `CAP_NET_RAW` for ping | `LocalSystem` by default; `--account` to change |
+
+The service shares `/etc/nettest` and `%ProgramData%\nettest` with nettest-server but no file
+names, so both can be installed on one host; `uninstall --purge` on either removes only its own
+files. Elevation, the credential-based config delivery and the Windows registration work exactly
+as for the server (see below). Exit codes of `monitor`: 0 stopped by signal, 2 `--test-notify`
+could not deliver everywhere, 3 invalid or missing `monitor.toml`, 4 log file not writable.
+
+---
+
 ## Server
 
 ```
@@ -278,7 +380,7 @@ nettest-server service install|edit|uninstall|start|stop|restart|status [...]
   and wss ports an HTTP request receives `HTTP/1.1 200` with a `text/plain` body, any other bytes
   (or silence for 3 s) receive the bare line, and a non-nettest UDP datagram receives the same
   line (at most one reply per source IP every 2 s and 50 per second overall, so the server cannot
-  amplify traffic). The text is `nettest by Slaytons Technology Services (nettest-server 1.0.0)`;
+  amplify traffic). The text is `nettest by Slaytons Technology Services (nettest-server 1.1.0)`;
   `--banner` changes the first part. Real clients are unaffected: the first bytes are classified
   and replayed into the protocol handler. Each banner reply is logged as `[scan] <proto> <peer>`.
 * The TUI shows listeners, the wss fingerprint, and a live client table (protocol, peer,
@@ -299,7 +401,7 @@ nettest-server service install --generate-token --ws-port 9100 --tcp-port 0 --ud
 nettest-server service edit --idle-timeout 120 --wss-port 9102   # change settings, restart
 nettest-server service status
 nettest-server service stop | start | restart
-nettest-server service uninstall [--purge]                     # --purge also deletes config, certs, logs
+nettest-server service uninstall [--purge]                     # --purge also deletes the server's config, certs, logs
 ```
 
 * **Token required.** `install` exits 3 unless a token is given (`--token`, `NETTEST_TOKEN`, or
@@ -325,7 +427,9 @@ nettest-server service uninstall [--purge]                     # --purge also de
 Linux notes: the unit passes the config as a systemd *credential* (`LoadCredential=`), which is
 how a root-only 0600 file reaches a dynamic user; this needs systemd 247 (2020) or newer. Ports
 below 1024 add `AmbientCapabilities=CAP_NET_BIND_SERVICE` automatically. `systemctl stop` sends
-SIGTERM, which the server handles like Ctrl-C. Windows notes: the service is registered with
+SIGTERM, which the server handles like Ctrl-C. `uninstall --purge` removes only the server's own
+files (`server.toml`, the certificates, `server.log`); a client monitor installed on the same
+host keeps its `monitor.toml`. Windows notes: the service is registered with
 `service run --config <path>` as its command line and depends on `Tcpip`; the firewall rule is
 not created automatically. `%ProgramData%` is readable by local users, so keep the token out of
 other places.
@@ -358,7 +462,10 @@ carries a UTF-8 reason.
 
 Requires Rust 1.85+ (edition 2024). No C toolchain beyond what Rust already needs; TLS is
 pure Rust (rustls + ring, no OpenSSL). Windows service management and ICMP use `windows-service`
-and `windows-sys` (pure Rust bindings to system DLLs); Linux ICMP uses `socket2`.
+and `windows-sys` (pure Rust bindings to system DLLs); Linux ICMP uses `socket2`. The monitor's
+HTTPS webhooks are verified against the Mozilla root bundle shipped in `webpki-roots` (no system
+certificate store is consulted, so behaviour is identical on every host); bump that crate to
+refresh the roots.
 
 ```sh
 cargo build --release                                   # Linux binaries in target/release/
@@ -400,11 +507,16 @@ editing the SVG; the generated files are committed so normal builds never need r
 ```
 crates/nettest-proto     shared: frame format + codec, transports (tcp/udp/ws/wss), TLS helpers,
                          serverless probes (icmp/tcp connect/sip/http), stats (latency/
-                         throughput/soak), sinks (console/csv/text/jsonl), HTML report, config
+                         throughput/soak), sinks (console/csv/text/jsonl), HTML report, config,
+                         line log, minimal HTTP POST client (webhooks)
+crates/nettest-service   shared service plumbing: elevation (sudo / UAC), systemd unit rendering
+                         and systemctl, Windows SCM helpers and the service entry point
 crates/nettest-client    runner (latency, soak, throughput, serverless probe loop, reconnect),
-                         headless driver, TUI
+                         headless driver, TUI, monitor/ (config, health state machine, per-target
+                         supervisor, ntfy/Slack/Discord delivery), service/ (monitor as a service),
+                         tests/monitor_loopback.rs (DOWN/UP transitions against a real server)
 crates/nettest-server    listeners (with scanner banner), session table, shared echo handler,
-                         log pipeline, TUI, service/ (systemd + Windows SCM install, elevation),
+                         TUI, service/ (server-specific install logic on top of nettest-service),
                          tests/loopback.rs (real server + real client per protocol, banner tests)
 assets/                  icon.svg source, rendered PNGs and icon.ico
 releases/<version>/      bare binaries committed per tagged version as a fallback download

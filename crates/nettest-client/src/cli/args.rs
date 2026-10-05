@@ -1,8 +1,11 @@
 //! clap definition for the client. Flags override the saved config; a positional target such as
 //! `wss://host:9102` or `sip://phone` is accepted as shorthand for `--protocol --host --port`,
 //! with the scheme's default port filled in when none is written.
+//!
+//! `monitor` and `service` are subcommands; a device literally named like one of them needs a
+//! scheme prefix (`ping://monitor`) so clap does not take it for the subcommand.
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use nettest_proto::config::{ClientConfig, TestMode};
 use nettest_proto::stats::TpDirection;
 use nettest_proto::transport::Protocol;
@@ -12,9 +15,12 @@ use nettest_proto::transport::Protocol;
     name = "nettest-client",
     version,
     about = "Interactive / scriptable network troubleshooting client: ws, wss, tcp, udp against nettest-server; ping, connect, sip, http, https against any device",
-    after_help = "EXIT CODES (headless): 0 ok, 1 thresholds exceeded, 2 connect/auth failure, 3 usage, 4 io, 5 interrupted"
+    after_help = "EXIT CODES (headless): 0 ok, 1 thresholds exceeded, 2 connect/auth failure, 3 usage, 4 io, 5 interrupted\nMONITORING: `nettest-client monitor --example-config` prints a monitor.toml; `nettest-client service install --from monitor.toml` runs it as a service."
 )]
 pub struct Args {
+    #[command(subcommand)]
+    pub command: Option<Cmd>,
+
     /// Target shorthand: ws://10.0.0.5:9101, tcp://host:9100, ping://10.0.0.7, sip://phone, connect://phone:5060, https://device/
     pub target: Option<String>,
 
@@ -119,6 +125,15 @@ pub struct Args {
     /// Write the effective settings back to the config file
     #[arg(long)]
     pub save_config: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Cmd {
+    /// Watch several targets from monitor.toml and send ntfy / Slack / Discord alerts when one
+    /// goes down or comes back
+    Monitor(crate::monitor::cli::MonitorArgs),
+    /// Install, control or remove the monitor as a system service (systemd or Windows)
+    Service(crate::service::ServiceArgs),
 }
 
 impl Args {
@@ -230,7 +245,7 @@ impl Args {
 }
 
 /// `scheme://host:port`, `scheme://host` (scheme default port), `host:port`, or `[v6]:port`.
-fn parse_target(t: &str, cfg: &mut ClientConfig) -> Result<(), String> {
+pub fn parse_target(t: &str, cfg: &mut ClientConfig) -> Result<(), String> {
     let (scheme, rest) = match t.split_once("://") {
         Some((s, r)) => (Some(s), r),
         None => (None, t),
@@ -319,6 +334,18 @@ mod tests {
         assert!(parse_target("connect://10.0.0.7", &mut c).is_err());
         parse_target("connect://10.0.0.7:5060", &mut c).unwrap();
         assert_eq!((c.protocol, c.port), (Protocol::Connect, 5060));
+    }
+
+    #[test]
+    fn subcommands_do_not_shadow_targets() {
+        let args = Args::try_parse_from(["nettest-client", "monitor", "--check"]).unwrap();
+        assert!(matches!(args.command, Some(Cmd::Monitor(ref m)) if m.check));
+        assert!(args.target.is_none());
+        let args = Args::try_parse_from(["nettest-client", "ping://monitor"]).unwrap();
+        assert!(args.command.is_none());
+        assert_eq!(args.target.as_deref(), Some("ping://monitor"));
+        let args = Args::try_parse_from(["nettest-client", "service", "status"]).unwrap();
+        assert!(matches!(args.command, Some(Cmd::Service(_))));
     }
 
     #[test]

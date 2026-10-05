@@ -33,8 +33,9 @@ pub async fn run(r: &mut Runner) -> (RunSummary, StopReason, Vec<ChartPoint>) {
         filler(payload_len, 7).into()
     };
 
-    let mut tracker = LatencyTracker::new(LossPolicy::for_interval(interval), 4096);
-    let mut soak_log = SoakLog::new();
+    let loss_override = r.cfg.loss_timeout_ms;
+    let mut tracker = LatencyTracker::new(LossPolicy::resolve(interval, loss_override), 4096);
+    let mut soak_log = SoakLog::with_capacity(r.history_limit().max(64));
     let deadline = (r.cfg.duration_secs > 0)
         .then(|| Instant::now() + Duration::from_secs(r.cfg.duration_secs));
     let max_count = r.cfg.count;
@@ -82,7 +83,7 @@ pub async fn run(r: &mut Runner) -> (RunSummary, StopReason, Vec<ChartPoint>) {
             && Instant::now() >= d
             && draining_until.is_none()
         {
-            draining_until = Some(Instant::now() + tracker_policy_timeout(interval));
+            draining_until = Some(Instant::now() + tracker_policy_timeout(interval, loss_override));
         }
         if let Some(until) = draining_until
             && (Instant::now() >= until || tracker.snapshot().in_flight == 0)
@@ -99,7 +100,7 @@ pub async fn run(r: &mut Runner) -> (RunSummary, StopReason, Vec<ChartPoint>) {
 
             _ = tick.tick(), if transport.is_some() && draining_until.is_none() => {
                 if max_count > 0 && seq >= max_count {
-                    draining_until = Some(Instant::now() + tracker_policy_timeout(interval));
+                    draining_until = Some(Instant::now() + tracker_policy_timeout(interval, loss_override));
                     continue;
                 }
                 seq += 1;
@@ -150,7 +151,7 @@ pub async fn run(r: &mut Runner) -> (RunSummary, StopReason, Vec<ChartPoint>) {
                         let wait = backoff.next();
                         r.emit_log(LogLevel::Warn, EventKind::Reconnecting { attempt: backoff.attempt, backoff_ms: wait.as_millis() as u64 });
                         r.emit_message(LogLevel::Debug, format!("reconnect attempt {} failed: {e}", backoff.attempt));
-                        let _ = r.events.try_send(UiEvent::Reconnecting { attempt: backoff.attempt, backoff_ms: wait.as_millis() as u64 });
+                        let _ = r.events.try_send(UiEvent::Reconnecting { attempt: backoff.attempt, backoff_ms: wait.as_millis() as u64, error: Some(e.to_string()) });
                         reconnect_at = Some(Instant::now() + wait);
                     }
                 }
@@ -214,6 +215,7 @@ fn disconnect(
     let _ = r.events.try_send(UiEvent::Reconnecting {
         attempt: backoff.attempt,
         backoff_ms: wait.as_millis() as u64,
+        error: None,
     });
     *reconnect_at = Some(Instant::now() + wait);
 }

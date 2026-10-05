@@ -9,6 +9,7 @@ mod probe;
 mod reconnect;
 mod throughput;
 
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use nettest_proto::config::{ClientConfig, TestMode};
@@ -42,7 +43,13 @@ pub struct Snapshot {
 pub enum UiEvent {
     Connected(ConnectTimings),
     Disconnected(String),
-    Reconnecting { attempt: u32, backoff_ms: u64 },
+    /// `error` is the dial failure for attempts that actually ran; `None` on the scheduling
+    /// notice that accompanies `Disconnected`.
+    Reconnecting {
+        attempt: u32,
+        backoff_ms: u64,
+        error: Option<String>,
+    },
     Sample(Sample),
     Snapshot(Box<Snapshot>),
     Log(Event),
@@ -72,8 +79,11 @@ pub struct Runner {
     pub sinks: MultiSink,
     pub events: mpsc::Sender<UiEvent>,
     pub commands: mpsc::Receiver<Command>,
-    pub log: Vec<Event>,
-    pub connects: Vec<ConnectTimings>,
+    /// Events and connects kept for the report, bounded by `history_limit` (a months-long
+    /// monitor run would otherwise grow without limit).
+    pub log: VecDeque<Event>,
+    pub connects: VecDeque<ConnectTimings>,
+    history_limit: usize,
     started: std::time::Instant,
 }
 
@@ -96,10 +106,31 @@ impl Runner {
             sinks,
             events,
             commands,
-            log: Vec::new(),
-            connects: Vec::new(),
+            log: VecDeque::new(),
+            connects: VecDeque::new(),
+            history_limit: usize::MAX,
             started: std::time::Instant::now(),
         }
+    }
+
+    /// Cap the retained events / connects (and the soak log's disconnect records). The default
+    /// is unlimited so TUI and headless reports are unchanged; the monitor passes 0.
+    pub fn set_history_limit(&mut self, n: usize) {
+        self.history_limit = n;
+    }
+
+    pub fn history_limit(&self) -> usize {
+        self.history_limit
+    }
+
+    fn push_bounded<T>(q: &mut VecDeque<T>, limit: usize, v: T) {
+        if limit == 0 {
+            return;
+        }
+        if q.len() >= limit {
+            q.pop_front();
+        }
+        q.push_back(v);
     }
 
     pub async fn run(mut self) -> RunOutput {
@@ -139,7 +170,7 @@ impl Runner {
         summary.mode = self.cfg.mode.to_string();
         summary.interval_ms = self.cfg.interval_ms;
         summary.payload_bytes = self.cfg.payload_bytes;
-        summary.connects = self.connects.clone();
+        summary.connects = self.connects.iter().cloned().collect();
         summary.stop_reason = reason.describe();
 
         self.emit_log(
@@ -157,7 +188,7 @@ impl Runner {
             summary,
             reason,
             chart,
-            events: self.log,
+            events: self.log.into_iter().collect(),
         }
     }
 
@@ -200,7 +231,7 @@ impl Runner {
     pub fn emit_log(&mut self, level: LogLevel, kind: EventKind) {
         let ev = Event::new(level, self.elapsed_s(), kind);
         self.sinks.on_event(&ev);
-        self.log.push(ev.clone());
+        Self::push_bounded(&mut self.log, self.history_limit, ev.clone());
         let _ = self.events.try_send(UiEvent::Log(ev));
     }
 
@@ -209,7 +240,7 @@ impl Runner {
     }
 
     pub fn on_connected(&mut self, t: &ConnectTimings) {
-        self.connects.push(t.clone());
+        Self::push_bounded(&mut self.connects, self.history_limit, t.clone());
         self.emit_log(LogLevel::Info, EventKind::Connected { timings: t.clone() });
         let _ = self.events.try_send(UiEvent::Connected(t.clone()));
     }

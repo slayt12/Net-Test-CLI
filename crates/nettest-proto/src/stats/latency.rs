@@ -23,6 +23,17 @@ impl LossPolicy {
             timeout: (interval * 10).max(Duration::from_secs(2)),
         }
     }
+
+    /// `for_interval` unless the config pins an explicit timeout (`ClientConfig::loss_timeout_ms`).
+    pub fn resolve(interval: Duration, override_ms: u64) -> Self {
+        if override_ms == 0 {
+            Self::for_interval(interval)
+        } else {
+            Self {
+                timeout: Duration::from_millis(override_ms),
+            }
+        }
+    }
 }
 
 const SEEN_WINDOW: u64 = 4096;

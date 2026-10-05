@@ -1,65 +1,25 @@
-//! systemd backend: unit file + `systemctl`.
+//! systemd backend: unit file + `systemctl` (helpers in `nettest_service::linux`).
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use nettest_service::files::{copy_binary, remove_binary};
+use nettest_service::linux::{
+    active_state, install_unit, remove_unit, require_systemd, status_text, systemctl, write_unit,
+};
 
 use super::systemd::{UnitParams, exec_from_unit, render_unit};
 use super::{
     EditArgs, InstallArgs, Report, SERVICE_NAME, ServiceError, build_edit_config,
-    build_install_config, cert_fingerprint, copy_binary, describe_config, needs_low_port,
+    build_install_config, cert_fingerprint, describe_config, needs_low_port, purge_files,
     service_paths,
 };
-
-fn require_systemd() -> Result<(), ServiceError> {
-    if Path::new("/run/systemd/system").is_dir() {
-        Ok(())
-    } else {
-        Err(ServiceError::usage(
-            "systemd not detected (/run/systemd/system missing); no other init system is supported",
-        ))
-    }
-}
-
-fn systemctl(args: &[&str]) -> Result<String, ServiceError> {
-    let out = Command::new("systemctl")
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| ServiceError::manager(format!("could not run systemctl: {e}")))?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else {
-        Err(ServiceError::manager(format!(
-            "systemctl {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        )))
-    }
-}
-
-fn active_state() -> String {
-    Command::new("systemctl")
-        .args(["is-active", SERVICE_NAME])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|_| "unknown".into())
-}
-
-fn write_unit(unit_path: &Path, text: &str) -> Result<(), ServiceError> {
-    if let Some(dir) = unit_path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(unit_path, text)?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(unit_path, std::fs::Permissions::from_mode(0o644))?;
-    Ok(())
-}
 
 fn report_state(out: &mut Report, cfg: &nettest_proto::config::ServerConfig) {
     let paths = service_paths();
     out.line(format!(
         "service     {SERVICE_NAME}.service: {}",
-        active_state()
+        active_state(SERVICE_NAME)
     ));
     for l in describe_config(cfg, &paths) {
         out.line(l);
@@ -93,9 +53,7 @@ pub fn install(a: InstallArgs, out: &mut Report) -> Result<(), ServiceError> {
         config: paths.config.clone(),
         needs_low_port: needs_low_port(&cfg),
     });
-    write_unit(&paths.unit, &unit)?;
-    systemctl(&["daemon-reload"])?;
-    systemctl(&["enable", "--now", SERVICE_NAME])?;
+    install_unit(&paths.unit, &unit, SERVICE_NAME)?;
     // Give the unit a moment so the state and the generated certificate are visible.
     std::thread::sleep(std::time::Duration::from_millis(700));
     out.line(format!(
@@ -143,35 +101,16 @@ pub fn edit(a: EditArgs, out: &mut Report) -> Result<(), ServiceError> {
 pub fn uninstall(purge: bool, out: &mut Report) -> Result<(), ServiceError> {
     require_systemd()?;
     let paths = service_paths();
-    if paths.unit.exists() {
-        // Tolerate a unit that is already stopped/disabled.
-        let _ = Command::new("systemctl")
-            .args(["disable", "--now", SERVICE_NAME])
-            .status();
-        std::fs::remove_file(&paths.unit)?;
-        systemctl(&["daemon-reload"])?;
+    if remove_unit(&paths.unit, SERVICE_NAME)? {
         out.line(format!("removed     {}", paths.unit.display()));
     } else {
         out.line("service was not installed");
     }
-    if paths.bin.exists() {
-        std::fs::remove_file(&paths.bin)?;
+    if remove_binary(&paths.bin, 1)? {
         out.line(format!("removed     {}", paths.bin.display()));
     }
     if purge {
-        for dir in [
-            paths.config.parent().map(Path::to_path_buf),
-            Some(paths.cert_dir.clone()),
-            paths.log_file.parent().map(Path::to_path_buf),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if dir.exists() {
-                std::fs::remove_dir_all(&dir)?;
-                out.line(format!("removed     {}", dir.display()));
-            }
-        }
+        purge_files(&paths, out)?;
     } else {
         out.line(format!(
             "kept        {} and {} (use --purge to delete)",
@@ -185,21 +124,21 @@ pub fn uninstall(purge: bool, out: &mut Report) -> Result<(), ServiceError> {
 pub fn start(out: &mut Report) -> Result<(), ServiceError> {
     require_systemd()?;
     systemctl(&["start", SERVICE_NAME])?;
-    out.line(format!("{SERVICE_NAME}: {}", active_state()));
+    out.line(format!("{SERVICE_NAME}: {}", active_state(SERVICE_NAME)));
     Ok(())
 }
 
 pub fn stop(out: &mut Report) -> Result<(), ServiceError> {
     require_systemd()?;
     systemctl(&["stop", SERVICE_NAME])?;
-    out.line(format!("{SERVICE_NAME}: {}", active_state()));
+    out.line(format!("{SERVICE_NAME}: {}", active_state(SERVICE_NAME)));
     Ok(())
 }
 
 pub fn restart(out: &mut Report) -> Result<(), ServiceError> {
     require_systemd()?;
     systemctl(&["restart", SERVICE_NAME])?;
-    out.line(format!("{SERVICE_NAME}: {}", active_state()));
+    out.line(format!("{SERVICE_NAME}: {}", active_state(SERVICE_NAME)));
     Ok(())
 }
 
@@ -213,11 +152,7 @@ pub fn status(out: &mut Report) -> Result<(), ServiceError> {
         ));
         return Ok(());
     }
-    // `systemctl status` exits non-zero for an inactive unit; its text is still the answer.
-    let st = Command::new("systemctl")
-        .args(["status", "--no-pager", "--lines=5", SERVICE_NAME])
-        .output()?;
-    out.line(String::from_utf8_lossy(&st.stdout).trim_end());
+    out.line(status_text(SERVICE_NAME)?);
     match nettest_proto::config::load::<nettest_proto::config::ServerConfig>(&paths.config) {
         Ok(cfg) => report_state(out, &cfg),
         Err(e) => out.line(format!(

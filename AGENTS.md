@@ -64,9 +64,44 @@ nobody has to rediscover them.
   client sends Hello immediately. UDP banner replies are rate limited (`BannerLimiter`), valid
   frames from unknown peers stay silently dropped.
 - **Serverless probes** spawn one future per sequence number (`JoinSet`); the per-probe timeout
-  equals `LossPolicy::for_interval(interval).timeout` so the tracker's `expire()` and the probe
-  future agree on "lost". A definitive negative becomes `SampleStatus::Failed` via
-  `LatencyTracker::on_failed` (counted in `lost`, also in `failed`).
+  equals `LossPolicy::resolve(interval, cfg.loss_timeout_ms).timeout` so the tracker's `expire()`
+  and the probe future agree on "lost". A definitive negative becomes `SampleStatus::Failed` via
+  `LatencyTracker::on_failed` (counted in `lost`, also in `failed`). `loss_timeout_ms = 0` keeps
+  the `max(2 s, 10 × interval)` default; the monitor sets it to the target's `timeout`.
+
+- **Shared service crate.** `crates/nettest-service` holds everything platform-generic about
+  "run as a service": `elevate`, `Report`, `ServiceError`, `files` (copy / purge helpers),
+  `systemd::render_unit(UnitSpec)`, `linux` systemctl wrappers and `windows` SCM helpers. The
+  `define_windows_service!` macro only emits an `extern "system"` trampoline that calls a handler
+  by name, so it is invoked **once**, in `nettest_service::windows`; a binary hands its async body
+  in as a `ServiceBody` through `run_as_service(spec, config, body, hint)` and a static holds it
+  until the SCM calls `service_main`. The server's unit text is pinned byte-for-byte by
+  `systemd::tests::server_unit_is_byte_identical`.
+- **One `LogsDirectory` per DynamicUser unit.** systemd re-chowns `LogsDirectory=`/`StateDirectory=`
+  to the unit's throwaway UID on every start, so two `DynamicUser=yes` units must not share a
+  name: the server uses `nettest`, the monitor `nettest-monitor`. Those directories are symlinks
+  into `/var/{lib,log}/private/`; `std::fs::remove_dir_all` would only unlink the symlink, which
+  is why `files::remove_dir_all_if_exists` also removes the private target.
+- **Purge semantics.** `/etc/nettest` and `%ProgramData%\nettest` are shared by the server
+  (`server.toml`, `certs/`, `server.log`) and the monitor (`monitor.toml`, `monitor.log`).
+  `uninstall --purge` removes only the caller's files and the directory when it is then empty.
+- **Monitor unit always grants `CAP_NET_RAW`.** Ping sockets usually work without it, but the
+  raw-socket fallback needs it, and a `ping://` target added to `monitor.toml` later would
+  otherwise be permanently DOWN with `ProbeError::Unsupported`.
+- **webpki-roots** provides `TlsClientMode::WebPki` (cached `Arc<ClientConfig>` in
+  `tls::client`) for the monitor's webhooks. It is the Mozilla bundle, not the OS store; the
+  https *probe* still accepts any certificate by design. Loopback test
+  `webpki_rejects_self_signed` guards against the modes being mixed up.
+- **Serverless `Connected` is not a success.** `runner/probe.rs` emits `on_connected` right after
+  DNS and socket setup, before any probe; the monitor supervisor (`signal_of`) ignores it for
+  serverless protocols and relies on samples only. The supervisor restarts a serverless runner on
+  a DOWN transition so DNS is re-resolved; nettest-protocol runners re-resolve on every `dial`.
+- **Runner memory is bounded** via `Runner::set_history_limit` (events / connects kept for the
+  report) and `SoakLog::with_capacity` (disconnect records; aggregates stay exact). The TUI and
+  headless runs keep the unlimited default; the monitor uses 0.
+- **nettest-client is lib + bin** (`src/lib.rs` re-exports every module) so
+  `tests/monitor_loopback.rs` can drive the supervisor against an in-process server. It also
+  made `main` a sync `fn` that builds the runtime itself (Windows SCM thread ownership).
 
 ## Conventions
 
@@ -77,6 +112,10 @@ nobody has to rediscover them.
 - Every listener must answer non-nettest traffic with the banner (`ServerConfig::banner_line`);
   a silent port is a regression. A service install must refuse an empty token.
 - `Protocol::ALL` order is the TUI cycle order: nettest protocols first, then serverless probes.
+- Monitor transitions are decided only by `monitor::health::Health` (pure, unit tested); the
+  supervisor normalises runner events into `Signal`s and the delivery task never blocks probing.
+- `monitor` and `service` are clap subcommands next to the positional target; a host named like
+  one needs a scheme prefix (documented in README).
 - **Releases:** pushing a tag `v<version>` runs `.github/workflows/release.yml`, which tests,
   builds both targets on ubuntu-22.04 (glibc 2.35 floor), runs `scripts/package.sh` and publishes
   the archives, bare binaries and `SHA256SUMS` to GitHub Releases. `package.sh` refuses when the

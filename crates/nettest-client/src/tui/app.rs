@@ -329,6 +329,7 @@ impl App {
             UiEvent::Reconnecting {
                 attempt,
                 backoff_ms,
+                ..
             } => {
                 self.link = Link::Reconnecting { attempt };
                 self.set_status(

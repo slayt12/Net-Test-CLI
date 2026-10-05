@@ -1,4 +1,7 @@
 //! Exit codes for headless runs. Documented in README; scripts depend on these staying stable.
+//!
+//! `nettest-client monitor` reuses them: 0 clean stop (signal), 2 `--test-notify` could not
+//! deliver to every notifier, 3 unreadable or invalid monitor.toml, 4 log file not writable.
 
 use std::process::ExitCode;
 

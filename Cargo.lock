@@ -1192,7 +1192,7 @@ dependencies = [
 
 [[package]]
 name = "nettest-client"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1202,16 +1202,20 @@ dependencies = [
  "futures-util",
  "humantime",
  "nettest-proto",
+ "nettest-server",
+ "nettest-service",
  "ratatui",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
+ "toml",
  "winresource",
 ]
 
 [[package]]
 name = "nettest-proto"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -1234,12 +1238,13 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "toml",
+ "webpki-roots",
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "nettest-server"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1247,8 +1252,8 @@ dependencies = [
  "clap",
  "crossterm",
  "futures-util",
- "libc",
  "nettest-proto",
+ "nettest-service",
  "ratatui",
  "ring",
  "rustls",
@@ -1259,8 +1264,19 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "windows-service",
- "windows-sys 0.61.2",
  "winresource",
+]
+
+[[package]]
+name = "nettest-service"
+version = "1.1.0"
+dependencies = [
+ "libc",
+ "nettest-proto",
+ "tokio",
+ "tokio-util",
+ "windows-service",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2674,6 +2690,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki-roots"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "wezterm-bidi"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2967,7 +2992,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "resvg",
 ]

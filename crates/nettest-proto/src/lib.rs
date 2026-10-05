@@ -11,6 +11,8 @@
 
 pub mod config;
 pub mod frame;
+pub mod http;
+pub mod log;
 pub mod probe;
 pub mod report;
 pub mod sinks;

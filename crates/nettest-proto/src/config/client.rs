@@ -88,6 +88,9 @@ pub struct ClientConfig {
     pub ws_path: String,
     /// Serverless soak: consecutive failed probes that open an outage.
     pub outage_after: u32,
+    /// Loss timeout per probe in ms; 0 = automatic (`max(2 s, 10 × interval)`). The monitor sets
+    /// it so a slow cadence still declares a probe lost quickly.
+    pub loss_timeout_ms: u64,
     pub sinks: SinkConfig,
 }
 
@@ -113,6 +116,7 @@ impl Default for ClientConfig {
             ipv6: None,
             ws_path: "/".into(),
             outage_after: 3,
+            loss_timeout_ms: 0,
             sinks: SinkConfig::default(),
         }
     }

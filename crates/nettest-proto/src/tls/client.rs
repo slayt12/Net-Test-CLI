@@ -1,9 +1,13 @@
-//! Client-side rustls config: either pinned to a server fingerprint or (explicitly) insecure.
+//! Client-side rustls config: pinned to a server fingerprint, verified against the Mozilla root
+//! bundle (webpki-roots), or (explicitly) insecure.
 //!
-//! Both verifiers still check the handshake signatures, so the only thing skipped is chain
-//! validation against a CA store, which a self-signed cert could never pass anyway.
+//! The pinned and insecure verifiers still check the handshake signatures, so the only thing
+//! skipped is chain validation against a CA store, which a self-signed cert could never pass
+//! anyway. `WebPki` is for public endpoints (the monitor's ntfy / Slack / Discord webhooks); it
+//! deliberately does not consult the operating system's store so behaviour is identical on
+//! every host.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, SignatureScheme};
@@ -17,11 +21,14 @@ pub enum TlsClientMode {
     Insecure,
     /// Accept only the certificate whose SHA-256 matches.
     Pinned(Fingerprint),
+    /// Full chain validation against the bundled Mozilla roots (public CAs only).
+    WebPki,
 }
 
 pub fn client_config(mode: TlsClientMode) -> Result<Arc<ClientConfig>, rustls::Error> {
     let provider = super::provider();
     let verifier: Arc<dyn ServerCertVerifier> = match mode {
+        TlsClientMode::WebPki => return Ok(webpki_config()),
         TlsClientMode::Insecure => Arc::new(Verifier {
             pin: None,
             provider: provider.clone(),
@@ -37,6 +44,23 @@ pub fn client_config(mode: TlsClientMode) -> Result<Arc<ClientConfig>, rustls::E
         .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
     Ok(Arc::new(cfg))
+}
+
+/// Built once: the root store holds ~150 anchors and every webhook would otherwise rebuild it.
+fn webpki_config() -> Arc<ClientConfig> {
+    static CFG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
+    CFG.get_or_init(|| {
+        let roots = rustls::RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+        };
+        let cfg = ClientConfig::builder_with_provider(super::provider())
+            .with_safe_default_protocol_versions()
+            .expect("ring provider supports the default protocol versions")
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        Arc::new(cfg)
+    })
+    .clone()
 }
 
 #[derive(Debug)]
@@ -101,5 +125,18 @@ impl ServerCertVerifier for Verifier {
         self.provider
             .signature_verification_algorithms
             .supported_schemes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn webpki_config_builds_and_is_shared() {
+        let a = client_config(TlsClientMode::WebPki).unwrap();
+        let b = client_config(TlsClientMode::WebPki).unwrap();
+        assert!(Arc::ptr_eq(&a, &b));
+        assert!(client_config(TlsClientMode::Insecure).is_ok());
     }
 }

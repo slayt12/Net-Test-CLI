@@ -3,7 +3,8 @@
 //! Linux uses a systemd unit, Windows the Service Control Manager; both read their settings from
 //! a system-wide `server.toml` written at install time and rewritten by `edit`, so the service
 //! always starts with pre-determined options and never with whatever happens to be in a user's
-//! config directory.
+//! config directory. The platform-generic machinery (elevation, `Report`, unit rendering, SCM
+//! host) lives in the `nettest-service` crate and is shared with the client monitor.
 //!
 //! Invariants:
 //! - A service is never installed or edited without a non-empty token.
@@ -11,8 +12,9 @@
 //!   elevated (sudo / UAC) and otherwise never prompts.
 //! - All user-visible output goes through `Report` so the Windows UAC child, whose console is
 //!   invisible, can hand it back to the parent via `--capture-output`.
+//! - `uninstall --purge` removes only the server's own files: `/etc/nettest` and
+//!   `%ProgramData%\nettest` are shared with the client monitor.
 
-mod elevate;
 mod paths;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod systemd;
@@ -32,25 +34,28 @@ mod unsupported;
 #[cfg(not(any(target_os = "linux", windows)))]
 use unsupported as platform;
 
-use std::fs::File;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Subcommand;
 use nettest_proto::config::ServerConfig;
+#[cfg_attr(windows, allow(unused_imports))]
+pub use nettest_service::{EXIT_USAGE, Report, ServiceError, ServiceSpec};
 
 use crate::cli::args::ServerFlags;
 pub use paths::{ServicePaths, service_paths};
 
 pub const SERVICE_NAME: &str = "nettest-server";
-#[cfg_attr(not(windows), allow(dead_code))]
-pub const DISPLAY_NAME: &str = "nettest server";
 pub const DESCRIPTION: &str =
     "nettest network troubleshooting server (echo, soak and throughput for nettest-client)";
 
-pub const EXIT_MANAGER: u8 = 2;
-pub const EXIT_USAGE: u8 = 3;
+#[cfg_attr(not(windows), allow(dead_code))]
+pub static SPEC: ServiceSpec = ServiceSpec {
+    name: SERVICE_NAME,
+    display_name: "nettest server",
+    description: DESCRIPTION,
+    program: "nettest-server",
+};
 
 #[derive(clap::Args, Debug)]
 pub struct ServiceArgs {
@@ -123,113 +128,23 @@ pub struct EditArgs {
     pub account: Option<String>,
 }
 
-/// Failure with the exit code it maps to.
-#[derive(Debug)]
-pub struct ServiceError {
-    pub code: u8,
-    pub msg: String,
-}
-
-impl ServiceError {
-    pub fn usage(msg: impl Into<String>) -> Self {
-        Self {
-            code: EXIT_USAGE,
-            msg: msg.into(),
-        }
-    }
-    pub fn manager(msg: impl Into<String>) -> Self {
-        Self {
-            code: EXIT_MANAGER,
-            msg: msg.into(),
-        }
-    }
-}
-
-impl std::fmt::Display for ServiceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.msg)
-    }
-}
-
-impl From<std::io::Error> for ServiceError {
-    fn from(e: std::io::Error) -> Self {
-        ServiceError::manager(e.to_string())
-    }
-}
-
-impl From<nettest_proto::config::ConfigError> for ServiceError {
-    fn from(e: nettest_proto::config::ConfigError) -> Self {
-        ServiceError::usage(e.to_string())
-    }
-}
-
-/// Console output that is also appended to the capture file when running as the UAC child.
-pub struct Report {
-    capture: Option<File>,
-}
-
-impl Report {
-    pub fn new(capture: Option<&Path>) -> Self {
-        Self {
-            capture: capture.and_then(|p| {
-                std::fs::OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open(p)
-                    .ok()
-            }),
-        }
-    }
-
-    pub fn line(&mut self, s: impl AsRef<str>) {
-        println!("{}", s.as_ref());
-        self.tee(s.as_ref());
-    }
-
-    pub fn err(&mut self, s: impl AsRef<str>) {
-        eprintln!("{}", s.as_ref());
-        self.tee(s.as_ref());
-    }
-
-    fn tee(&mut self, s: &str) {
-        if let Some(f) = self.capture.as_mut() {
-            let _ = writeln!(f, "{s}");
-        }
-    }
-}
-
 pub fn dispatch(args: ServiceArgs) -> ExitCode {
     if let ServiceAction::Run { config } = &args.action {
         return platform::run_as_service(config.clone());
     }
-    let mut out = Report::new(args.capture_output.as_deref());
-    if args.action.needs_root() && !elevate::is_elevated() {
-        let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-        return match elevate::reexec_elevated(&argv) {
-            Ok(code) => code,
-            Err(e) => {
-                out.err(format!("could not obtain administrator rights: {e}"));
-                ExitCode::from(EXIT_USAGE)
-            }
-        };
-    }
-    let result = match args.action {
-        ServiceAction::Install(a) => platform::install(a, &mut out),
-        ServiceAction::Edit(a) => platform::edit(a, &mut out),
-        ServiceAction::Uninstall { purge } => platform::uninstall(purge, &mut out),
-        ServiceAction::Start => platform::start(&mut out),
-        ServiceAction::Stop => platform::stop(&mut out),
-        ServiceAction::Restart => platform::restart(&mut out),
-        ServiceAction::Status => platform::status(&mut out),
-        ServiceAction::Run { .. } => unreachable!("handled above"),
-    };
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            out.err(format!("error: {e}"));
-            ExitCode::from(e.code)
+    let needs_root = args.action.needs_root();
+    nettest_service::run_elevated(needs_root, args.capture_output.as_deref(), |out| {
+        match args.action {
+            ServiceAction::Install(a) => platform::install(a, out),
+            ServiceAction::Edit(a) => platform::edit(a, out),
+            ServiceAction::Uninstall { purge } => platform::uninstall(purge, out),
+            ServiceAction::Start => platform::start(out),
+            ServiceAction::Stop => platform::stop(out),
+            ServiceAction::Restart => platform::restart(out),
+            ServiceAction::Status => platform::status(out),
+            ServiceAction::Run { .. } => unreachable!("handled above"),
         }
-    }
+    })
 }
 
 // ---- helpers shared by the platform backends ---------------------------------------------
@@ -348,31 +263,35 @@ pub(crate) fn describe_config(cfg: &ServerConfig, paths: &ServicePaths) -> Vec<S
     ]
 }
 
-/// Copy the running executable to the system location. The old file is unlinked first so a
-/// binary that is currently executing (an upgrade) can be replaced.
-pub(crate) fn copy_binary(dest: &Path) -> Result<PathBuf, ServiceError> {
-    let src = std::env::current_exe()?;
-    if same_file(&src, dest) {
-        return Ok(dest.to_path_buf());
+/// Remove the server's own files only (config, certificates, logs) and the shared directory
+/// when nothing else is left in it.
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+pub(crate) fn purge_files(paths: &ServicePaths, out: &mut Report) -> Result<(), ServiceError> {
+    use nettest_service::files::{remove_dir_all_if_exists, remove_dir_if_empty, remove_file_if_exists};
+    if remove_file_if_exists(&paths.config)? {
+        out.line(format!("removed     {}", paths.config.display()));
     }
-    if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir)?;
+    if remove_dir_all_if_exists(&paths.cert_dir)? {
+        out.line(format!("removed     {}", paths.cert_dir.display()));
     }
-    let _ = std::fs::remove_file(dest);
-    std::fs::copy(&src, dest)?;
-    #[cfg(unix)]
+    for f in [&paths.log_file, &jsonl_sibling(&paths.log_file)] {
+        if remove_file_if_exists(f)? {
+            out.line(format!("removed     {}", f.display()));
+        }
+    }
+    for dir in [paths.config.parent(), paths.log_file.parent()]
+        .into_iter()
+        .flatten()
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
+        if remove_dir_if_empty(dir)? {
+            out.line(format!("removed     {}", dir.display()));
+        }
     }
-    Ok(dest.to_path_buf())
+    Ok(())
 }
 
-fn same_file(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        (Ok(x), Ok(y)) => x == y,
-        _ => false,
-    }
+fn jsonl_sibling(log: &Path) -> PathBuf {
+    log.with_extension("jsonl")
 }
 
 /// Fingerprint of the service's wss certificate, if it has been generated yet.
@@ -423,5 +342,32 @@ mod tests {
             ..Default::default()
         };
         assert!(build_edit_config(&flags, false, &paths, &mut out).is_err());
+    }
+
+    #[test]
+    fn purge_removes_only_own_files() {
+        let dir = std::env::temp_dir().join(format!("nettest-purge-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let etc = dir.join("etc");
+        let logs = dir.join("log");
+        std::fs::create_dir_all(&etc).unwrap();
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(etc.join("server.toml"), "x").unwrap();
+        std::fs::write(etc.join("monitor.toml"), "y").unwrap();
+        std::fs::write(logs.join("server.log"), "z").unwrap();
+        std::fs::create_dir_all(dir.join("lib").join("c")).unwrap();
+        let paths = ServicePaths {
+            bin: dir.join("bin"),
+            config: etc.join("server.toml"),
+            cert_dir: dir.join("lib"),
+            log_file: logs.join("server.log"),
+            unit: dir.join("unit"),
+        };
+        purge_files(&paths, &mut Report::new(None)).unwrap();
+        assert!(etc.join("monitor.toml").exists(), "the other service's config survives");
+        assert!(!etc.join("server.toml").exists());
+        assert!(!dir.join("lib").exists());
+        assert!(!logs.exists(), "empty log dir is removed");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
