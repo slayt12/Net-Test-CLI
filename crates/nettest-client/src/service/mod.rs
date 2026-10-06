@@ -141,26 +141,38 @@ pub(crate) fn stage_config(
             )));
         }
     };
-    // Decodes UTF-16 from PowerShell redirections; the installed copy is always UTF-8.
-    let text = config::read_text(&source).map_err(ServiceError::usage)?;
-    let cfg = config::parse_str(&text)
+    // Any common encoding is accepted (UTF-16 from a PowerShell redirection, ANSI from
+    // Set-Content); the installed copy is always written as UTF-8, even when the source *is* the
+    // installed file, so the service never has to convert again.
+    let decoded = config::read_text(&source).map_err(ServiceError::usage)?;
+    let cfg = config::parse_str(&decoded.text)
         .map_err(|e| ServiceError::usage(format!("{}: {e}", source.display())))?;
-    let resolved = config::resolve(&cfg).map_err(|errs| {
+    let mut resolved = config::resolve(&cfg).map_err(|errs| {
         ServiceError::usage(format!(
             "{} has problems:\n  - {}",
             source.display(),
             errs.join("\n  - ")
         ))
     })?;
+    resolved.encoding = decoded.encoding;
+    if !decoded.encoding.is_utf8() {
+        resolved.warnings.insert(0, config::encoding_warning(decoded.encoding));
+    }
     for w in &resolved.warnings {
         out.line(format!("warning     {w}"));
     }
-    if !same_path(&source, &paths.config) {
-        nettest_service::files::write_private(&paths.config, text.as_bytes())?;
+    let in_place = same_path(&source, &paths.config);
+    if !in_place || !decoded.encoding.is_utf8() {
+        nettest_service::files::write_private(&paths.config, decoded.text.as_bytes())?;
         out.line(format!(
-            "config      {} -> {}",
-            source.display(),
-            paths.config.display()
+            "config      {}{}{}",
+            if in_place { String::new() } else { format!("{} -> ", source.display()) },
+            paths.config.display(),
+            if decoded.encoding.is_utf8() {
+                String::new()
+            } else {
+                format!(" (converted from {} to UTF-8)", decoded.encoding)
+            }
         ));
     }
     Ok(resolved)
@@ -253,11 +265,22 @@ mod tests {
         for u in "# keep me\n[[targets]]\ntarget = \"ping://10.0.0.1\"\n".encode_utf16() {
             bytes.extend_from_slice(&u.to_le_bytes());
         }
-        std::fs::write(&utf16, bytes).unwrap();
+        std::fs::write(&utf16, &bytes).unwrap();
         stage_config(Some(&utf16), &paths, &mut out).unwrap();
         assert_eq!(std::fs::read_to_string(&paths.config).unwrap(), "# keep me\n[[targets]]\ntarget = \"ping://10.0.0.1\"\n");
         let r2 = stage_config(None, &paths, &mut out).unwrap();
         assert_eq!(r2.targets[0].name, "ping://10.0.0.1");
+        // An installed copy that is somehow UTF-16 (hand-edited in place) is rewritten as UTF-8
+        // on the next install without --from; an ANSI source converts too.
+        std::fs::write(&paths.config, &bytes).unwrap();
+        let r3 = stage_config(None, &paths, &mut out).unwrap();
+        assert!(r3.warnings[0].contains("UTF-16 LE"), "{:?}", r3.warnings);
+        assert_eq!(std::fs::read_to_string(&paths.config).unwrap(), "# keep me\n[[targets]]\ntarget = \"ping://10.0.0.1\"\n");
+        let ansi = dir.join("ansi.toml");
+        std::fs::write(&ansi, b"# caf\xE9\n[[targets]]\ntarget = \"ping://10.0.0.1\"\n").unwrap();
+        let r4 = stage_config(Some(&ansi), &paths, &mut out).unwrap();
+        assert!(r4.warnings[0].contains("Windows-1252"), "{:?}", r4.warnings);
+        assert!(std::fs::read_to_string(&paths.config).unwrap().starts_with("# caf\u{E9}\n"));
         assert!(describe(&r2, &paths).iter().any(|l| l.contains("monitor.log")));
         std::fs::remove_dir_all(&dir).unwrap();
     }

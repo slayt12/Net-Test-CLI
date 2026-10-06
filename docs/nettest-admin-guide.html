@@ -50,13 +50,13 @@
   <div>
     <h1>nettest Administrator Guide</h1>
     <p class="subtitle">Network path troubleshooting with the nettest client and server</p>
-    <p class="meta">Version 1.1.1 · Covers Windows 11 and Linux · October 2026 (revision 3: endpoint monitoring service with ntfy / Slack / Discord alerts)</p>
+    <p class="meta">Version 1.1.2 · Covers Windows 11 and Linux · October 2026 (revision 4: Microsoft Teams alerts, automatic monitor.toml encoding conversion)</p>
   </div>
 </div>
 
 <p>nettest is a two-part tool for diagnosing flaky network paths. The <b>server</b> runs at the far end and echoes test traffic. The <b>client</b> runs where the problem is seen, measures round-trip latency, packet loss, jitter, connection stability and throughput, and shows the results live in a terminal window or writes them to files for a ticket. Both parts are single executables with no installer and no runtime dependencies.</p>
 <p>It speaks the same test protocol over four transports, <b>WebSocket (ws)</b>, <b>WebSocket over TLS (wss)</b>, <b>raw TCP</b> and <b>UDP</b>, so you can tell apart "the network drops packets" from "the proxy kills WebSocket connections" from "TLS negotiation is slow" using one tool. For devices that cannot run software, such as IP phones, switches and gateways, the client also probes with <b>ICMP ping</b>, <b>TCP connect</b>, <b>SIP OPTIONS</b> and <b>HTTP(S)</b>, with the same statistics, chart and reports (section 8).</p>
-<p>New in 1.1.0: the client can run as a <b>monitoring service</b> that watches any number of endpoints around the clock and sends an <b>ntfy</b>, <b>Slack</b> or <b>Discord</b> message when one goes down and when it comes back (section 9).</p>
+<p>New in 1.1.0: the client can run as a <b>monitoring service</b> that watches any number of endpoints around the clock and sends an <b>ntfy</b>, <b>Slack</b>, <b>Discord</b> or <b>Microsoft Teams</b> message when one goes down and when it comes back (section 9).</p>
 
 <div class="toc">
 <ol>
@@ -84,7 +84,7 @@
 <tr><td>Privileges</td><td>Standard user for all tests. <code>ping://</code> uses the unprivileged ICMP API on Windows and the unprivileged "ping socket" on Linux (allowed for everyone on current Fedora, Ubuntu, Debian and other systemd-based distributions; otherwise root). Installing the server or the client monitor <b>as a service</b> needs administrator / root; the installer asks for it itself (sections 3 and 9).</td></tr>
 <tr><td>Disk and memory</td><td>About 3 MB per executable. Memory stays flat during multi-hour runs and for a monitor that runs for months.</td></tr>
 <tr><td>Terminal</td><td>Any modern terminal: Windows Terminal, PowerShell, cmd.exe, or any Linux terminal. The interactive view needs at least 80x24 characters; 130x40 is comfortable.</td></tr>
-<tr><td>Network</td><td>Server: inbound access on the ports you enable (defaults below). Client: outbound access to those ports, or to the device's ICMP / SIP / HTTP ports for serverless probes. Monitor: additionally outbound HTTPS (port 443) to ntfy.sh, Slack or Discord, or to your own ntfy server. HTTP proxies are not traversed automatically; test the direct path.</td></tr>
+<tr><td>Network</td><td>Server: inbound access on the ports you enable (defaults below). Client: outbound access to those ports, or to the device's ICMP / SIP / HTTP ports for serverless probes. Monitor: additionally outbound HTTPS (port 443) to ntfy.sh, Slack, Discord or the Teams workflow endpoint, or to your own ntfy server. HTTP proxies are not traversed automatically; test the direct path.</td></tr>
 <tr><td>Clock sync</td><td>Not required. All latency is round-trip and measured on the client's own clock.</td></tr>
 </table>
 
@@ -144,7 +144,7 @@ nettest-server --bind 172.16.89.25 --ws-port 9100 --tcp-port 0 --udp-port 0 --ws
 <p>Security scanners (nmap, Nessus, Qualys and the like) must be able to identify every listening port. Anything that connects to a nettest listener without speaking the nettest protocol therefore receives a readable answer:</p>
 <table>
 <tr><th>What connects</th><th>What it receives</th></tr>
-<tr><td>An HTTP request on the TCP, ws or wss port (a browser, <code>curl</code>, an HTTP scanner)</td><td><code>HTTP/1.1 200 OK</code> with a <code>text/plain</code> body:<br><code>nettest by Slaytons Technology Services (nettest-server 1.1.1)</code></td></tr>
+<tr><td>An HTTP request on the TCP, ws or wss port (a browser, <code>curl</code>, an HTTP scanner)</td><td><code>HTTP/1.1 200 OK</code> with a <code>text/plain</code> body:<br><code>nettest by Slaytons Technology Services (nettest-server 1.1.2)</code></td></tr>
 <tr><td>Any other bytes, or a connection that sends nothing for 3 seconds (nmap's "null probe")</td><td>The same line without HTTP framing, then the connection is closed</td></tr>
 <tr><td>A UDP datagram that is not a nettest frame</td><td>The same line as one datagram, at most once per source address every 2 seconds and 50 per second overall, so the server cannot be abused to amplify traffic</td></tr>
 <tr><td>A TLS client on the wss port that never completes the handshake</td><td>The server certificate, which already identifies the service</td></tr>
@@ -201,7 +201,7 @@ token       set (32 chars)
 cert dir    /var/lib/nettest
 log file    /var/log/nettest/server.log
 idle        60 s
-banner      nettest by Slaytons Technology Services (nettest-server 1.1.1)
+banner      nettest by Slaytons Technology Services (nettest-server 1.1.2)
 wss SHA-256 6A:52:9B:B2:36:96:47:06:FB:F0:AC:7A:EE:A2:A7:CF:49:9D:89:45:D9:1C:9B:FE:3A:51:BD:52:21:9F:67:ED</pre>
 
 <h2 id="s4" class="page">4. Client: interactive terminal UI</h2>
@@ -347,7 +347,7 @@ nettest-client --no-tui https://10.0.0.77/ -c 20
 nettest-client sip://10.0.0.77</pre>
 
 <h2 id="s9" class="page">9. Client: monitoring endpoints as a service</h2>
-<p><code>nettest-client monitor</code> turns the client into an always-on watcher. It probes any number of endpoints continuously, decides when each one is <b>DOWN</b> and when it is <b>UP</b> again, and sends a message to <b>ntfy</b>, <b>Slack</b> or <b>Discord</b> on every change. Installed as a service it starts at boot and keeps going through reboots, endpoints that are down when it starts, and webhook endpoints that are temporarily unreachable. It uses exactly the probes from sections 7 and 8, so anything you can test you can monitor: a nettest-server across a WAN link, a PBX, a gateway, a printer's web interface.</p>
+<p><code>nettest-client monitor</code> turns the client into an always-on watcher. It probes any number of endpoints continuously, decides when each one is <b>DOWN</b> and when it is <b>UP</b> again, and sends a message to <b>ntfy</b>, <b>Slack</b>, <b>Discord</b> or <b>Microsoft Teams</b> on every change. Installed as a service it starts at boot and keeps going through reboots, endpoints that are down when it starts, and webhook endpoints that are temporarily unreachable. It uses exactly the probes from sections 7 and 8, so anything you can test you can monitor: a nettest-server across a WAN link, a PBX, a gateway, a printer's web interface.</p>
 <p>Typical use: one monitor per site, watching the things that site depends on, telling the on-call phone within seconds when the link to head office, the SIP trunk or the gateway stops answering, and again when it recovers, with the time it was down.</p>
 
 <h3>Workflow</h3>
@@ -359,7 +359,7 @@ nettest-client service install --from monitor.toml          # install and start 
 nettest-client service status
 nettest-client service restart                              # after editing the installed monitor.toml
 nettest-client service uninstall [--purge]                  # --purge also removes monitor.toml and the log</pre>
-<p>The file may be UTF-8 or UTF-16 (which is what Windows PowerShell's <code>&gt;</code> redirection writes); both are read, and the installed copy is always UTF-8. Run <code>--check</code> and <code>--test-notify</code> before installing: the first catches typos in the file, the second proves the webhook URL, token and TLS path work from this machine. Both exit 0 on success.</p>
+<p>The file's encoding is detected and converted automatically: UTF-8 (with or without a byte-order mark), UTF-16 (which is what Windows PowerShell's <code>&gt;</code> redirection writes) and Windows-1252/ANSI (what <code>Set-Content</code> and old Notepad write) are all read. <code>--check</code> prints an <code>encoding</code> line and a warning when a conversion happened, and <code>service install</code> always stores the installed copy as UTF-8, also when re-installing without <code>--from</code>. Run <code>--check</code> and <code>--test-notify</code> before installing: the first catches typos in the file, the second proves the webhook URL, token and TLS path work from this machine. Both exit 0 on success.</p>
 
 <h3>The configuration file</h3>
 <p><code>monitor.toml</code> has one <code>[monitor]</code> section, one <code>[[targets]]</code> block per endpoint and one <code>[[notify]]</code> block per destination. Durations are written with a unit: <code>500ms</code>, <code>10s</code>, <code>2m</code>, <code>1h30m</code>; <code>"0"</code> disables a timer. A minimal file:</p>
@@ -383,13 +383,17 @@ token = "s3cret"
 fingerprint = "6A:52:9B:..."        # or insecure = true
 
 [[notify]]
-kind = "ntfy"                       # ntfy | slack | discord
+kind = "ntfy"                       # ntfy | slack | discord | teams
 url = "https://ntfy.sh/my-secret-topic"
 priority = "high"
 
 [[notify]]
 kind = "slack"
-url = "https://hooks.slack.com/services/T000/B000/XXXX"</pre>
+url = "https://hooks.slack.com/services/T000/B000/XXXX"
+
+[[notify]]
+kind = "teams"                      # Microsoft Teams Workflows webhook, see the key table
+url = "https://&lt;env&gt;.environment.api.powerplatform.com/powerautomate/automations/direct/cu/.../invoke?api-version=1&amp;sp=...&amp;sv=1.0&amp;sig=..."</pre>
 
 <table>
 <tr><th><code>[monitor]</code> key</th><th>Default</th><th>Meaning</th></tr>
@@ -415,8 +419,8 @@ url = "https://hooks.slack.com/services/T000/B000/XXXX"</pre>
 
 <table>
 <tr><th><code>[[notify]]</code> key</th><th>Default</th><th>Meaning</th></tr>
-<tr><td><code>kind</code></td><td>(required)</td><td><code>ntfy</code>, <code>slack</code> or <code>discord</code>.</td></tr>
-<tr><td><code>url</code></td><td>(required)</td><td>ntfy: the topic URL (<code>https://ntfy.sh/&lt;topic&gt;</code> or your own server). Slack: the incoming-webhook URL. Discord: the channel's webhook URL. Treat these URLs as secrets; anyone who has one can post to the channel.</td></tr>
+<tr><td><code>kind</code></td><td>(required)</td><td><code>ntfy</code>, <code>slack</code>, <code>discord</code> or <code>teams</code>.</td></tr>
+<tr><td><code>url</code></td><td>(required)</td><td>ntfy: the topic URL (<code>https://ntfy.sh/&lt;topic&gt;</code> or your own server). Slack: the incoming-webhook URL. Discord: the channel's webhook URL. Teams: the Workflows webhook URL. In Teams open the channel's <b>...</b> menu, choose <b>Workflows</b>, pick <b>Post to a channel when a webhook request is received</b> (or <b>Send webhook alerts to a channel</b>) and copy the URL it shows; the trigger must allow "Anyone" to call it, since nettest sends no token (the old Office 365 connector URLs are retired by Microsoft and not supported). Treat all these URLs as secrets; anyone who has one can post to the channel, and for Teams the <code>sig=</code> part of the URL is the password.</td></tr>
 <tr><td><code>name</code></td><td>kind#n</td><td>Label in the log ("notify ops phone: delivered ...").</td></tr>
 <tr><td><code>token</code></td><td>(none)</td><td>ntfy access token for protected topics, sent as <code>Authorization: Bearer</code>.</td></tr>
 <tr><td><code>priority</code></td><td><code>high</code></td><td>ntfy priority of DOWN alerts (<code>min</code>, <code>low</code>, <code>default</code>, <code>high</code>, <code>urgent</code> or 1-5). UP alerts always use <code>default</code>.</td></tr>
@@ -439,11 +443,11 @@ gateway (ping://10.0.0.1) is UP again at 2026-10-05 14:09:40 -05:00 after 6m29s 
 
 nettest: pbx still DOWN
 pbx (sip://pbx.example.com:5060) has been DOWN for 1h00m: timed out — monitor on branch-pc</pre>
-<p>The first line is the title (ntfy notification title, bold in Slack and Discord); the rest is the body. The reason is the last failure seen: "probe lost (no reply)", "connection refused", "closed by peer", "reconnect attempt 3 failed: ...". All configured notifiers receive every message. Delivery runs in its own task so a slow webhook never delays probing: three attempts per message (after 2 s and 5 s; a 429 answer is retried after the time the service asks for), a 4xx answer other than 429 is treated as permanent (a wrong URL will not fix itself), and every outcome is written to the log.</p>
+<p>The first line is the title (ntfy notification title, bold in Slack and Discord, the heading of a card in Teams, coloured red for DOWN and green for UP); the rest is the body. The reason is the last failure seen: "probe lost (no reply)", "connection refused", "closed by peer", "reconnect attempt 3 failed: ...". All configured notifiers receive every message. Delivery runs in its own task so a slow webhook never delays probing: three attempts per message (after 2 s and 5 s; a 429 answer is retried after the time the service asks for), a 4xx answer other than 408 and 429 is treated as permanent (a wrong URL will not fix itself), and every outcome is written to the log.</p>
 
 <h3>The log</h3>
 <p>The monitor writes one line per transition, per delivery result and (every <code>summary_every</code>) per target, so the log alone tells the story even if the webhooks were unreachable. In the foreground the log goes to the console; as a service to the file in the table below (and, on Linux, to <code>journalctl -u nettest-monitor</code>).</p>
-<pre>2026-10-05 13:09:07.816 INFO  nettest-client 1.1.1 monitor starting on branch-pc: 3 target(s), 1 notifier(s)
+<pre>2026-10-05 13:09:07.816 INFO  nettest-client 1.1.2 monitor starting on branch-pc: 3 target(s), 1 notifier(s)
 2026-10-05 13:09:07.818 INFO  [gateway] up
 2026-10-05 13:09:12.219 WARN  [pbx] DOWN after 3 consecutive failures: connection refused
 2026-10-05 13:09:12.219 INFO  notify ops phone (ntfy): delivered "nettest: pbx DOWN" (200) in 143 ms
@@ -548,7 +552,7 @@ nettest-client monitor --config monitor.toml --test-notify              # test t
 nettest-client monitor --config monitor.toml                            # foreground
 nettest-client service install --from monitor.toml                      # permanent service
 nettest-client service status | restart | stop | start | uninstall      # manage it</pre>
-<p>Alert rule: DOWN after <code>failures_before_down</code> (3) consecutive failures, UP after <code>successes_before_up</code> (1) successes, optional <code>remind_every</code>. Notifiers: <code>ntfy</code>, <code>slack</code>, <code>discord</code>.</p>
+<p>Alert rule: DOWN after <code>failures_before_down</code> (3) consecutive failures, UP after <code>successes_before_up</code> (1) successes, optional <code>remind_every</code>. Notifiers: <code>ntfy</code>, <code>slack</code>, <code>discord</code>, <code>teams</code>.</p>
 <table style="width:auto; display:inline-table; margin-right:24pt; vertical-align:top" class="keys">
 <tr><th colspan="2">Interactive keys</th></tr>
 <tr><td><kbd>s</kbd></td><td>start / run again</td></tr>
@@ -575,6 +579,6 @@ Server service: <code>%ProgramData%\nettest\</code> or <code>/etc/nettest/server
 Monitor service: <code>%ProgramData%\nettest\monitor.toml</code> or <code>/etc/nettest/monitor.toml</code>, <code>/var/log/nettest-monitor/</code><br>
 Outputs: <code>nettest-&lt;timestamp&gt;.csv / .log / .jsonl / .html</code></p>
 
-<p class="footer">nettest Administrator Guide · Slaytons Technology Services · 2026-10-05 · revision 3 (version 1.1.1)</p>
+<p class="footer">nettest Administrator Guide · Slaytons Technology Services · 2026-10-06 · revision 4 (version 1.1.2)</p>
 </body>
 </html>

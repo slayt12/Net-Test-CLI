@@ -34,10 +34,18 @@ pub fn default_config_path() -> PathBuf {
     nettest_proto::config::config_dir().join("monitor.toml")
 }
 
-/// Load + resolve, printing every problem. Shared with `service install`.
+/// Load + resolve, collecting every problem. Also used by `service status`; `service install`
+/// goes through `read_text` itself because it needs the text to write the installed copy.
+/// A file that is not plain UTF-8 is converted on the way in and reported as a warning so the
+/// user knows what was found (`--check` output, the monitor log, the install report).
 pub fn load_resolved(path: &std::path::Path) -> Result<Resolved, Vec<String>> {
-    let cfg = config::load(path).map_err(|e| vec![e])?;
-    config::resolve(&cfg)
+    let (cfg, encoding) = config::load(path).map_err(|e| vec![e])?;
+    let mut resolved = config::resolve(&cfg)?;
+    resolved.encoding = encoding;
+    if !encoding.is_utf8() {
+        resolved.warnings.insert(0, config::encoding_warning(encoding));
+    }
+    Ok(resolved)
 }
 
 pub async fn run(args: MonitorArgs) -> ExitCode {
@@ -62,6 +70,7 @@ pub async fn run(args: MonitorArgs) -> ExitCode {
 
     if args.check {
         println!("config      {}", path.display());
+        println!("encoding    {}", resolved.encoding);
         for l in config::describe(&resolved) {
             println!("{l}");
         }

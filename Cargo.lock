@@ -1192,7 +1192,7 @@ dependencies = [
 
 [[package]]
 name = "nettest-client"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1215,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "nettest-proto"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "bytes",
  "chrono",
@@ -1244,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "nettest-server"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1269,7 +1269,7 @@ dependencies = [
 
 [[package]]
 name = "nettest-service"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "libc",
  "nettest-proto",
@@ -2992,7 +2992,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "resvg",
 ]

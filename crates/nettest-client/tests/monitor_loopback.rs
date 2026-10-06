@@ -1,6 +1,6 @@
 //! Monitor supervisor against an in-process nettest-server: DOWN when the server goes away, UP
 //! when it is back, for a persistent-connection target (ws) and a serverless one (connect),
-//! plus webhook delivery against a local fake endpoint.
+//! plus webhook delivery (Discord and Teams payloads) against local fake endpoints.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -246,4 +246,60 @@ async fn webhook_delivery_against_local_listener() {
     let v: serde_json::Value = serde_json::from_str(body).unwrap();
     assert!(v["content"].as_str().unwrap().contains("**nettest: pbx DOWN**"));
     assert_eq!(v["username"], "nettest");
+}
+
+/// Teams Workflows trigger: the query string (which carries the signature) must reach the
+/// server untouched, the body must be the `message` + Adaptive Card envelope, and the trigger's
+/// `202 Accepted` counts as delivered.
+#[tokio::test]
+async fn teams_delivery_against_local_listener() {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut s, _) = l.accept().await.unwrap();
+        let mut buf = vec![0u8; 16384];
+        let mut got = Vec::new();
+        loop {
+            let n = s.read(&mut buf).await.unwrap();
+            got.extend_from_slice(&buf[..n]);
+            if n == 0 || got.windows(4).any(|w| w == b"\r\n\r\n") && got.ends_with(b"}") {
+                break;
+            }
+        }
+        s.write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        s.shutdown().await.unwrap();
+        String::from_utf8_lossy(&got).into_owned()
+    });
+    let path = "/powerautomate/automations/direct/cu/1/workflows/2/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=abc";
+    let n = ResolvedNotifier {
+        kind: NotifyKind::Teams,
+        name: "fake teams".into(),
+        url: Url::parse(&format!("http://127.0.0.1:{port}{path}")).unwrap(),
+        token: String::new(),
+        priority: "high".into(),
+        tags_down: String::new(),
+        tags_up: String::new(),
+        tls: TlsClientMode::WebPki,
+        timeout: Duration::from_secs(5),
+    };
+    let msg = Notification {
+        kind: Kind::Up,
+        title: "nettest: pbx UP".into(),
+        body: "pbx (sip://10.0.0.5:5060) is UP again".into(),
+    };
+    let failed = notify::deliver_all(&[n], &msg, &quiet_log()).await;
+    assert_eq!(failed, 0);
+    let req = server.await.unwrap();
+    assert!(req.starts_with(&format!("POST {path} HTTP/1.1\r\n")), "{req}");
+    assert!(req.contains("Content-Type: application/json\r\n"), "{req}");
+    let body = req.split("\r\n\r\n").nth(1).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v["type"], "message");
+    assert!(v["text"].as_str().unwrap().starts_with("nettest: pbx UP\n"));
+    let card = &v["attachments"][0];
+    assert_eq!(card["contentType"], "application/vnd.microsoft.card.adaptive");
+    assert_eq!(card["content"]["body"][0]["text"], "nettest: pbx UP");
+    assert_eq!(card["content"]["body"][0]["color"], "Good");
 }

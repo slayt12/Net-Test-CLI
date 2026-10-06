@@ -4,7 +4,7 @@
 Windows 11 and Linux that measure round-trip latency, loss, jitter, connection stability and
 throughput over WebSocket, TCP and UDP, and probe devices that cannot run software (IP phones,
 switches, gateways) with ping, TCP connect, SIP OPTIONS and HTTP. The client also runs as a
-**monitoring service** that watches any number of endpoints and sends ntfy, Slack or Discord
+**monitoring service** that watches any number of endpoints and sends ntfy, Slack, Discord or Teams
 alerts when one goes down or comes back.
 
 [![Release](https://img.shields.io/github/v/release/slayt12/Net-Test-CLI?label=release)](https://github.com/slayt12/Net-Test-CLI/releases)
@@ -28,7 +28,7 @@ troubleshooting recipes: [nettest-admin-guide.pdf](nettest-admin-guide.pdf).
 
 Ready-to-run packages for every version are on the
 **[Releases page](https://github.com/slayt12/Net-Test-CLI/releases)**. Nothing to install: unpack,
-copy the file where you need it, run it. Current version **1.1.1**.
+copy the file where you need it, run it. Current version **1.1.2**.
 
 | Asset | Contents |
 |---|---|
@@ -72,7 +72,7 @@ producing the same statistics, live chart and reports.
 nettest-server          runs on the far end: echoes probes, counts throughput, logs clients;
                         installs itself as a systemd unit or Windows service
 nettest-client          interactive TUI with live chart, or headless for scripts and cron;
-                        `monitor` watches endpoints and alerts via ntfy / Slack / Discord,
+                        `monitor` watches endpoints and alerts via ntfy / Slack / Discord / Teams,
                         installable as a systemd unit or Windows service
 ```
 
@@ -283,7 +283,9 @@ nettest-client service status | restart | stop | start
 nettest-client service uninstall [--purge]                 # --purge also removes monitor.toml and the log
 ```
 
-A minimal `monitor.toml` (UTF-8, or UTF-16 as Windows PowerShell's `>` writes it; both are read):
+A minimal `monitor.toml` (save it as UTF-8, UTF-16 or Windows-1252/ANSI, whatever your editor or
+PowerShell produced: the encoding is detected, `--check` prints it, and `service install` stores
+the installed copy as UTF-8):
 
 ```toml
 [[targets]]
@@ -306,7 +308,7 @@ token = "s3cret"
 fingerprint = "6A:52:..."           # or insecure = true
 
 [[notify]]
-kind = "ntfy"                       # ntfy | slack | discord
+kind = "ntfy"                       # ntfy | slack | discord | teams
 url = "https://ntfy.sh/my-secret-topic"
 # token = "tk_..."                  # ntfy access token
 priority = "high"                   # ntfy priority of DOWN alerts; UP alerts use "default"
@@ -318,6 +320,10 @@ url = "https://hooks.slack.com/services/T000/B000/XXXX"
 [[notify]]
 kind = "discord"
 url = "https://discord.com/api/webhooks/123456/abcdef"
+
+[[notify]]
+kind = "teams"                      # Microsoft Teams via a Workflows webhook (see below)
+url = "https://<env>.environment.api.powerplatform.com/powerautomate/automations/direct/cu/.../invoke?api-version=1&sp=...&sv=1.0&sig=..."
 ```
 
 * **Alert rule.** Every probe (or, for ws/wss/tcp/udp, every echo, disconnect and failed
@@ -328,12 +334,20 @@ url = "https://discord.com/api/webhooks/123456/abcdef"
   the monitor starts is reported DOWN after the same number of failures.
 * **Notifiers.** All configured notifiers receive every alert. ntfy gets a text message with
   `Title`, `Priority` and `Tags` headers (and `Authorization: Bearer` when `token` is set);
-  Slack and Discord get their JSON webhook payload. Delivery runs in its own task with three
+  Slack and Discord get their JSON webhook payload; Teams gets an Adaptive Card (title coloured
+  red for DOWN, green for UP) plus a plain-text copy. Delivery runs in its own task with three
   attempts (2 s, 5 s, `Retry-After` on 429); a webhook that fails is logged, never retried
   forever, and never delays probing. `notify_on_start = true` in `[monitor]` sends a message at
   startup so you know the chain works; `--test-notify` does the same on demand.
-* **TLS.** Webhook HTTPS is verified against the Mozilla root bundle (public ntfy.sh, Slack and
-  Discord just work). For a self-hosted ntfy with a self-signed certificate set `insecure = true`
+* **Microsoft Teams.** The old Office 365 connector webhooks are retired; use a Workflows
+  webhook instead: in Teams open the channel's `...` menu, choose **Workflows**, pick **Post to
+  a channel when a webhook request is received** (or **Send webhook alerts to a channel**), and
+  copy the URL it shows into `url`. Leave the trigger open to "Anyone" (nettest sends no
+  token; the `sig=` part of the URL is the secret, so treat the URL like a password). The
+  payload carries both an Adaptive Card and a `text` field, so either template posts the alert,
+  and the trigger's `202 Accepted` counts as delivered.
+* **TLS.** Webhook HTTPS is verified against the Mozilla root bundle (public ntfy.sh, Slack,
+  Discord and Teams just work). For a self-hosted ntfy with a self-signed certificate set `insecure = true`
   or pin it with `fingerprint = "<sha256>"` on that notifier. Plain `http://` is accepted for a
   LAN ntfy. Monitored `wss://` targets still need `insecure` or `fingerprint`, like the CLI.
 * **Log.** Every transition, every delivery result and (every `summary_every`, default 1 h) a
@@ -380,7 +394,7 @@ nettest-server service install|edit|uninstall|start|stop|restart|status [...]
   and wss ports an HTTP request receives `HTTP/1.1 200` with a `text/plain` body, any other bytes
   (or silence for 3 s) receive the bare line, and a non-nettest UDP datagram receives the same
   line (at most one reply per source IP every 2 s and 50 per second overall, so the server cannot
-  amplify traffic). The text is `nettest by Slaytons Technology Services (nettest-server 1.1.1)`;
+  amplify traffic). The text is `nettest by Slaytons Technology Services (nettest-server 1.1.2)`;
   `--banner` changes the first part. Real clients are unaffected: the first bytes are classified
   and replayed into the protocol handler. Each banner reply is logged as `[scan] <proto> <peer>`.
 * The TUI shows listeners, the wss fingerprint, and a live client table (protocol, peer,
@@ -513,7 +527,7 @@ crates/nettest-service   shared service plumbing: elevation (sudo / UAC), system
                          and systemctl, Windows SCM helpers and the service entry point
 crates/nettest-client    runner (latency, soak, throughput, serverless probe loop, reconnect),
                          headless driver, TUI, monitor/ (config, health state machine, per-target
-                         supervisor, ntfy/Slack/Discord delivery), service/ (monitor as a service),
+                         supervisor, ntfy/Slack/Discord/Teams delivery), service/ (monitor as a service),
                          tests/monitor_loopback.rs (DOWN/UP transitions against a real server)
 crates/nettest-server    listeners (with scanner banner), session table, shared echo handler,
                          TUI, service/ (server-specific install logic on top of nettest-service),

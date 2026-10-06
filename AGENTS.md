@@ -103,6 +103,24 @@ nobody has to rediscover them.
   `tests/monitor_loopback.rs` can drive the supervisor against an in-process server. It also
   made `main` a sync `fn` that builds the runtime itself (Windows SCM thread ownership).
 
+- **monitor.toml encodings.** Windows PowerShell 5.1 writes `>` redirections as UTF-16 LE with a
+  BOM and `Set-Content`/`Out-File -Encoding Default` as ANSI (Windows-1252); old Notepad saves
+  ANSI too. `monitor::config::decode_text` accepts UTF-8 (BOM or not), UTF-16 LE/BE (BOM or
+  BOM-less, detected by the NUL-every-second-byte pattern of ASCII text) and Windows-1252
+  (fallback for invalid UTF-8, never fails), and rejects UTF-32. `Resolved::encoding` carries the
+  result; a non-UTF-8 file becomes the first warning and `service install` rewrites the installed
+  copy as UTF-8 even when `--from` is omitted.
+- **Microsoft Teams webhooks** are Power Automate "When a Teams webhook request is received"
+  triggers (Office 365 connectors are retired). Body: `{"type":"message","text":...,
+  "attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","content":{Adaptive
+  Card}}]}`. Both fields are sent on purpose: the "Post to a channel when a webhook request is
+  received" template posts each attachment and ignores `text`, the "Send webhook alerts to a
+  channel" template reads `text`. The trigger answers `202 Accepted` (counted as delivered),
+  limits a message to 28 KB and ~4 requests/s (429 after), and the `sig=` query parameter is the
+  secret, so the URL must be sent verbatim with its query string. Sources:
+  https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook
+  and https://learn.microsoft.com/en-us/connectors/teams/ ("Microsoft Teams - Webhook").
+
 ## Conventions
 
 - Every non-trivial file starts with a `//!` header: purpose, why, invariants.
@@ -124,5 +142,6 @@ nobody has to rediscover them.
   predates the workflow, use "Run workflow" in the Actions tab with the tag name. `target/` and
   `dist/` are ignored; `releases/<version>/` holds bare binaries committed as a fallback download
   (the exception in `.gitignore`). The admin guide source is `docs/nettest-admin-guide.html`; render it with the
-  chromium command in its header comment (`--generate-pdf-document-outline` gives the PDF its
+  chromium command in its header comment, run from the repo root so the PDF lands at
+  `nettest-admin-guide.pdf` next to README.md (`--generate-pdf-document-outline` gives the PDF its
   bookmarks) and keep its version line, banner text and footer in step with the version.

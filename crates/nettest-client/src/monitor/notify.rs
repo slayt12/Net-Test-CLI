@@ -1,8 +1,9 @@
 //! Alert delivery: turn a target transition into a message and POST it to every configured
-//! notifier (ntfy, Slack incoming webhook, Discord webhook) with retries.
+//! notifier (ntfy, Slack incoming webhook, Discord webhook, Microsoft Teams workflow) with
+//! retries.
 //!
 //! One delivery task drains a bounded queue so a slow endpoint never stalls monitoring. Retry
-//! policy: 3 attempts; transport errors and 5xx retry after 2 s then 5 s; 429 honours
+//! policy: 3 attempts; transport errors, 5xx and 408 retry after 2 s then 5 s; 429 honours
 //! `Retry-After` (capped at 30 s); any other 4xx is permanent (a bad URL will not fix itself).
 //!
 //! Wire formats:
@@ -11,6 +12,12 @@
 //! - Slack: `POST <webhook url>` with JSON `{"text": ...}`; replies `200 ok`.
 //! - Discord: `POST <webhook url>` with JSON `{"content": ..., "username": "nettest"}`;
 //!   replies `204 No Content`; `content` is limited to 2000 characters.
+//! - Teams: `POST <workflow trigger url>` with JSON `{"type": "message", "text": ...,
+//!   "attachments": [Adaptive Card]}`; replies `202 Accepted`. Both `text` and the card are sent
+//!   because the two Teams templates differ: "Post to a channel when a webhook request is
+//!   received" posts each attachment, "Send webhook alerts to a channel" reads `text`. The
+//!   trigger accepts either and ignores what its template does not use (Microsoft Learn,
+//!   connectors/teams "Microsoft Teams - Webhook"; limit 28 KB, ~4 requests/s then 429).
 
 use std::time::Duration;
 
@@ -159,6 +166,10 @@ pub async fn send_one(n: &ResolvedNotifier, msg: &Notification) -> Result<Respon
             let body = serde_json::json!({ "content": content, "username": "nettest" });
             post(&n.url, &[], "application/json", body.to_string().as_bytes(), &opts).await
         }
+        NotifyKind::Teams => {
+            let body = teams_body(msg);
+            post(&n.url, &[], "application/json", body.to_string().as_bytes(), &opts).await
+        }
     };
     match res {
         Ok(r) if r.is_success() => Ok(r),
@@ -271,6 +282,35 @@ pub async fn run_delivery(
     }
 }
 
+/// Teams Workflows payload: an Adaptive Card (title coloured by severity, body wrapped) plus a
+/// plain `text` copy. Card markdown treats `*`/`_` as emphasis, which the message text does not
+/// use, and the whole thing is a few hundred bytes against the 28 KB limit.
+pub fn teams_body(msg: &Notification) -> serde_json::Value {
+    let color = match msg.kind {
+        Kind::Down | Kind::Remind => "Attention",
+        Kind::Up => "Good",
+        Kind::Info => "Default",
+    };
+    serde_json::json!({
+        "type": "message",
+        "text": format!("{}\n{}", msg.title, msg.body),
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "contentUrl": null,
+            "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "msteams": { "width": "Full" },
+                "body": [
+                    { "type": "TextBlock", "text": msg.title, "weight": "Bolder", "size": "Medium", "color": color, "wrap": true },
+                    { "type": "TextBlock", "text": msg.body, "wrap": true }
+                ]
+            }
+        }]
+    })
+}
+
 fn ascii_only(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { '?' })
@@ -322,6 +362,24 @@ mod tests {
         assert_eq!(ascii_only("héllo\n"), "h?llo?");
         assert_eq!(truncate_chars("abcdef", 4).chars().count(), 4);
         assert_eq!(truncate_chars("abc", 4), "abc");
+    }
+
+    #[test]
+    fn teams_payload() {
+        let msg = |kind| Notification { kind, title: "nettest: pbx DOWN".into(), body: "pbx is DOWN".into() };
+        let v = teams_body(&msg(Kind::Down));
+        assert_eq!(v["type"], "message");
+        assert_eq!(v["text"], "nettest: pbx DOWN\npbx is DOWN");
+        let card = &v["attachments"][0];
+        assert_eq!(card["contentType"], "application/vnd.microsoft.card.adaptive");
+        assert!(card["contentUrl"].is_null());
+        assert_eq!(card["content"]["type"], "AdaptiveCard");
+        assert_eq!(card["content"]["body"][0]["text"], "nettest: pbx DOWN");
+        assert_eq!(card["content"]["body"][0]["color"], "Attention");
+        assert_eq!(card["content"]["body"][1]["text"], "pbx is DOWN");
+        assert_eq!(teams_body(&msg(Kind::Up))["attachments"][0]["content"]["body"][0]["color"], "Good");
+        assert_eq!(teams_body(&msg(Kind::Remind))["attachments"][0]["content"]["body"][0]["color"], "Attention");
+        assert_eq!(teams_body(&msg(Kind::Info))["attachments"][0]["content"]["body"][0]["color"], "Default");
     }
 
     #[test]

@@ -94,6 +94,9 @@ pub enum NotifyKind {
     Ntfy,
     Slack,
     Discord,
+    /// Microsoft Teams through a Workflows (Power Automate) "When a Teams webhook request is
+    /// received" trigger; the retired Office 365 connector URLs are not supported.
+    Teams,
 }
 
 impl std::fmt::Display for NotifyKind {
@@ -102,6 +105,7 @@ impl std::fmt::Display for NotifyKind {
             NotifyKind::Ntfy => "ntfy",
             NotifyKind::Slack => "slack",
             NotifyKind::Discord => "discord",
+            NotifyKind::Teams => "teams",
         })
     }
 }
@@ -110,7 +114,8 @@ impl std::fmt::Display for NotifyKind {
 #[serde(deny_unknown_fields)]
 pub struct NotifyConfig {
     pub kind: NotifyKind,
-    /// ntfy: topic URL (https://ntfy.sh/<topic>); Slack / Discord: the incoming-webhook URL.
+    /// ntfy: topic URL (https://ntfy.sh/<topic>); Slack / Discord: the incoming-webhook URL;
+    /// Teams: the Workflows trigger URL (its `sig=` query parameter is the secret).
     pub url: String,
     #[serde(default)]
     pub name: String,
@@ -198,11 +203,21 @@ pub struct Resolved {
     pub notifiers: Vec<ResolvedNotifier>,
     /// Non-fatal findings (no notifiers, odd priority) for the log.
     pub warnings: Vec<String>,
+    /// Encoding the file was read in (`Utf8` when resolved from an in-memory string).
+    pub encoding: Encoding,
+}
+
+/// Warning text for a file that had to be converted; put first in `Resolved::warnings`.
+pub fn encoding_warning(encoding: Encoding) -> String {
+    format!(
+        "config file is {encoding}; converted to UTF-8 while loading (service install stores the installed copy as UTF-8)"
+    )
 }
 
 /// Read and parse. A missing file is an error here (unlike the client's own config, where
-/// defaults are fine): a monitor without targets is pointless.
-pub fn load(path: &Path) -> Result<MonitorConfig, String> {
+/// defaults are fine): a monitor without targets is pointless. Also returns the encoding the
+/// file was found in so callers can tell the user when it was not UTF-8.
+pub fn load(path: &Path) -> Result<(MonitorConfig, Encoding), String> {
     if !path.exists() {
         return Err(format!(
             "{} does not exist (create one with `nettest-client monitor --example-config > {}`)",
@@ -210,41 +225,140 @@ pub fn load(path: &Path) -> Result<MonitorConfig, String> {
             path.display()
         ));
     }
-    let text = read_text(path)?;
-    parse_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+    let d = read_text(path)?;
+    let cfg = parse_str(&d.text).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((cfg, d.encoding))
 }
 
-/// Read a config file written by any common tool: UTF-8 with or without a byte-order mark, or
-/// UTF-16 with one. Windows PowerShell 5.1 writes `>` redirections as UTF-16 LE, so
-/// `nettest-client monitor --example-config > monitor.toml` would otherwise be unreadable.
-pub fn read_text(path: &Path) -> Result<String, String> {
+/// Encoding a config file was found in. Only `Utf8` needs no conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoding {
+    Utf8,
+    Utf8Bom,
+    Utf16Le,
+    Utf16Be,
+    Utf16LeNoBom,
+    Utf16BeNoBom,
+    Windows1252,
+}
+
+impl Encoding {
+    pub fn is_utf8(&self) -> bool {
+        *self == Encoding::Utf8
+    }
+}
+
+impl std::fmt::Display for Encoding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Encoding::Utf8 => "UTF-8",
+            Encoding::Utf8Bom => "UTF-8 with byte-order mark",
+            Encoding::Utf16Le => "UTF-16 LE",
+            Encoding::Utf16Be => "UTF-16 BE",
+            Encoding::Utf16LeNoBom => "UTF-16 LE (no byte-order mark)",
+            Encoding::Utf16BeNoBom => "UTF-16 BE (no byte-order mark)",
+            Encoding::Windows1252 => "Windows-1252 (ANSI)",
+        })
+    }
+}
+
+pub struct Decoded {
+    pub text: String,
+    pub encoding: Encoding,
+}
+
+/// Read a config file written by any common Windows or Linux tool and hand back UTF-8.
+/// Windows PowerShell 5.1 writes `>` redirections as UTF-16 LE and `Set-Content` as ANSI
+/// (Windows-1252); old Notepad saves ANSI too. Rather than refusing those, every reader converts
+/// on the way in and `service install` stores the converted copy, so the service itself only
+/// ever sees UTF-8.
+pub fn read_text(path: &Path) -> Result<Decoded, String> {
     let bytes =
         std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     decode_text(&bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-pub fn decode_text(bytes: &[u8]) -> Result<String, String> {
-    let utf16 = |le: bool| -> Result<String, String> {
-        let body = &bytes[2..];
-        if body.len() % 2 != 0 {
-            return Err("UTF-16 file has an odd number of bytes".into());
+pub fn decode_text(bytes: &[u8]) -> Result<Decoded, String> {
+    let utf16 = |body: &[u8], le: bool| -> Result<String, String> {
+        if !body.len().is_multiple_of(2) {
+            return Err("UTF-16 file has an odd number of bytes; save the file as UTF-8".into());
         }
         let units: Vec<u16> = body
-            .chunks_exact(2)
-            .map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) })
             .collect();
-        String::from_utf16(&units).map_err(|_| "UTF-16 file contains invalid characters".into())
+        let s = String::from_utf16(&units)
+            .map_err(|_| "UTF-16 file contains invalid characters; save the file as UTF-8".to_string())?;
+        // A second BOM (file concatenation, some editors) would otherwise reach the TOML parser.
+        Ok(s.strip_prefix('\u{FEFF}').map(str::to_string).unwrap_or(s))
     };
-    if bytes.starts_with(&[0xFF, 0xFE]) {
-        return utf16(true);
+    let done = |text, encoding| Ok(Decoded { text, encoding });
+    if bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF]) || bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) {
+        return Err("UTF-32 is not supported; save the file as UTF-8".into());
     }
-    if bytes.starts_with(&[0xFE, 0xFF]) {
-        return utf16(false);
+    if let Some(body) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return done(utf16(body, true)?, Encoding::Utf16Le);
     }
-    let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    String::from_utf8(body.to_vec()).map_err(|_| {
-        "not valid UTF-8 (or UTF-16 with a byte-order mark); save the file as UTF-8, e.g. in PowerShell `(Get-Content monitor.toml) | Set-Content -Encoding utf8 monitor.toml`".into()
-    })
+    if let Some(body) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return done(utf16(body, false)?, Encoding::Utf16Be);
+    }
+    if let Some(body) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        let s = String::from_utf8(body.to_vec())
+            .map_err(|_| "has a UTF-8 byte-order mark but is not valid UTF-8; save the file as UTF-8".to_string())?;
+        return done(s, Encoding::Utf8Bom);
+    }
+    match utf16_without_bom(bytes) {
+        Some(true) => return done(utf16(bytes, true)?, Encoding::Utf16LeNoBom),
+        Some(false) => return done(utf16(bytes, false)?, Encoding::Utf16BeNoBom),
+        None => {}
+    }
+    match String::from_utf8(bytes.to_vec()) {
+        Ok(s) => done(s, Encoding::Utf8),
+        Err(_) => done(windows_1252(bytes), Encoding::Windows1252),
+    }
+}
+
+/// `Some(true)` for UTF-16 LE, `Some(false)` for BE, `None` for anything else. A TOML file is
+/// ASCII-dominated, so UTF-16 shows as a NUL in every second byte, and valid UTF-8 text never
+/// contains NUL at all. Only the first 512 bytes are inspected.
+fn utf16_without_bom(bytes: &[u8]) -> Option<bool> {
+    let head = &bytes[..bytes.len().min(512) & !1];
+    if head.len() < 4 {
+        return None;
+    }
+    let (even_nul, odd_nul) = head.as_chunks::<2>().0.iter().fold((0usize, 0usize), |(e, o), c| {
+        (e + usize::from(c[0] == 0), o + usize::from(c[1] == 0))
+    });
+    let pairs = head.len() / 2;
+    // Every odd byte NUL and no even byte NUL = little endian, and vice versa. A few non-NUL
+    // odd bytes would mean non-Latin text; a config file is not expected to have any.
+    if odd_nul == pairs && even_nul == 0 {
+        Some(true)
+    } else if even_nul == pairs && odd_nul == 0 {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// Windows-1252 to UTF-8: 0x00-0x7F and 0xA0-0xFF are Latin-1, 0x80-0x9F are the typographic
+/// extras (curly quotes, dashes, €); the five unassigned slots become U+FFFD.
+fn windows_1252(bytes: &[u8]) -> String {
+    const HIGH: [char; 32] = [
+        '\u{20AC}', '\u{FFFD}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}', '\u{2021}',
+        '\u{02C6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{FFFD}', '\u{017D}', '\u{FFFD}',
+        '\u{FFFD}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2022}', '\u{2013}', '\u{2014}',
+        '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}', '\u{FFFD}', '\u{017E}', '\u{0178}',
+    ];
+    bytes
+        .iter()
+        .map(|&b| match b {
+            0x80..=0x9F => HIGH[usize::from(b - 0x80)],
+            _ => char::from(b),
+        })
+        .collect()
 }
 
 pub fn parse_str(text: &str) -> Result<MonitorConfig, String> {
@@ -422,6 +536,9 @@ pub fn resolve(cfg: &MonitorConfig) -> Result<Resolved, Vec<String>> {
         if n.kind != NotifyKind::Ntfy && !n.token.is_empty() {
             warnings.push(format!("{ctx}: token is only used by ntfy"));
         }
+        if n.kind == NotifyKind::Teams && !url.https {
+            warnings.push(format!("{ctx}: Teams workflow URLs are https://; check the url"));
+        }
         notifiers.push(ResolvedNotifier {
             kind: n.kind,
             name,
@@ -462,6 +579,7 @@ pub fn resolve(cfg: &MonitorConfig) -> Result<Resolved, Vec<String>> {
         targets,
         notifiers,
         warnings,
+        encoding: Encoding::Utf8,
     })
 }
 
@@ -604,6 +722,14 @@ tags_up = "white_check_mark"
 # kind = "discord"
 # name = "alerts channel"
 # url = "https://discord.com/api/webhooks/123456/abcdef"
+
+# Microsoft Teams: channel > ... > Workflows > "Post to a channel when a webhook request is
+# received" (or "Send webhook alerts to a channel"), then copy the URL it shows. The trigger must
+# allow "Anyone" to call it; the sig= part of the URL is the secret.
+# [[notify]]
+# kind = "teams"
+# name = "NOC channel"
+# url = "https://<env>.environment.api.powerplatform.com/powerautomate/automations/direct/cu/.../invoke?api-version=1&sp=...&sv=1.0&sig=..."
 "##
 }
 
@@ -679,24 +805,36 @@ url = "hooks.slack.com/x"
     #[test]
     fn text_encodings() {
         let toml = "[[targets]]\ntarget = \"ping://10.0.0.1\"\n";
-        assert_eq!(decode_text(toml.as_bytes()).unwrap(), toml);
+        let dec = |b: &[u8]| decode_text(b).map(|d| (d.text, d.encoding));
+        assert_eq!(dec(toml.as_bytes()).unwrap(), (toml.to_string(), Encoding::Utf8));
         let mut bom8 = vec![0xEF, 0xBB, 0xBF];
         bom8.extend_from_slice(toml.as_bytes());
-        assert_eq!(decode_text(&bom8).unwrap(), toml);
+        assert_eq!(dec(&bom8).unwrap(), (toml.to_string(), Encoding::Utf8Bom));
         // What Windows PowerShell 5.1 writes for `--example-config > monitor.toml`.
-        let mut le = vec![0xFF, 0xFE];
-        for u in toml.encode_utf16() {
-            le.extend_from_slice(&u.to_le_bytes());
-        }
-        assert_eq!(decode_text(&le).unwrap(), toml);
-        let mut be = vec![0xFE, 0xFF];
-        for u in toml.encode_utf16() {
-            be.extend_from_slice(&u.to_be_bytes());
-        }
-        assert_eq!(decode_text(&be).unwrap(), toml);
-        let err = decode_text(&[0xC3, 0x28, b'x']).unwrap_err();
-        assert!(err.contains("Set-Content"), "{err}");
-        assert!(decode_text(&[0xFF, 0xFE, 0x41]).is_err());
+        let le: Vec<u8> = toml.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let be: Vec<u8> = toml.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let with = |bom: &[u8], body: &[u8]| [bom, body].concat();
+        assert_eq!(dec(&with(&[0xFF, 0xFE], &le)).unwrap(), (toml.to_string(), Encoding::Utf16Le));
+        assert_eq!(dec(&with(&[0xFE, 0xFF], &be)).unwrap(), (toml.to_string(), Encoding::Utf16Be));
+        assert_eq!(dec(&le).unwrap(), (toml.to_string(), Encoding::Utf16LeNoBom));
+        assert_eq!(dec(&be).unwrap(), (toml.to_string(), Encoding::Utf16BeNoBom));
+        // A stray second BOM inside the UTF-16 body is dropped.
+        let double = with(&[0xFF, 0xFE], &with(&[0xFF, 0xFE], &le));
+        assert_eq!(dec(&double).unwrap().0, toml);
+        // PowerShell `Set-Content` / old Notepad: ANSI. `é` is 0xE9, the em dash 0x97.
+        let ansi = b"# caf\xE9 \x97 x\n[[targets]]\ntarget = \"ping://10.0.0.1\"\n";
+        let (text, enc) = dec(ansi).unwrap();
+        assert_eq!(enc, Encoding::Windows1252);
+        assert!(text.starts_with("# caf\u{E9} \u{2014} x\n"), "{text}");
+        assert!(parse_str(&text).is_ok());
+        assert_eq!(windows_1252(&[0x81, 0x80]), "\u{FFFD}\u{20AC}");
+        assert!(dec(&[0xFF, 0xFE, 0x00, 0x00, 0x41]).unwrap_err().contains("UTF-32"));
+        assert!(dec(&[0xFF, 0xFE, 0x41]).unwrap_err().contains("odd number"));
+        assert_eq!(utf16_without_bom(b"ab"), None);
+        assert_eq!(utf16_without_bom(b"a\0b\0c\0d"), Some(true));
+        assert_eq!(utf16_without_bom(b"\0a\0b\0c\0d"), Some(false));
+        assert!(!Encoding::Utf8Bom.is_utf8() && Encoding::Utf8.is_utf8());
+        assert_eq!(Encoding::Utf16LeNoBom.to_string(), "UTF-16 LE (no byte-order mark)");
     }
 
     #[test]
@@ -714,6 +852,12 @@ priority = "loud"
 kind = "discord"
 url = "https://discord.com/api/webhooks/1/x"
 token = "x"
+[[notify]]
+kind = "teams"
+url = "https://x.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/1/workflows/2/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=abc"
+[[notify]]
+kind = "teams"
+url = "http://teams.lan/hook"
 "#,
         )
         .unwrap();
@@ -721,7 +865,12 @@ token = "x"
         assert_eq!(r.notifiers[0].tls, TlsClientMode::Insecure);
         assert_eq!(r.notifiers[0].name, "ntfy#1");
         assert_eq!(r.notifiers[1].tls, TlsClientMode::WebPki);
-        assert_eq!(r.warnings.len(), 3, "{:?}", r.warnings);
+        assert_eq!((r.notifiers[2].kind, r.notifiers[2].tls), (NotifyKind::Teams, TlsClientMode::WebPki));
+        assert_eq!(r.notifiers[2].name, "teams#3");
+        assert!(r.notifiers[2].url.path.ends_with("&sig=abc"));
+        assert_eq!(r.warnings.len(), 4, "{:?}", r.warnings);
+        assert!(r.warnings[3].contains("https://"), "{:?}", r.warnings);
+        assert!(describe(&r).iter().any(|l| l.contains("teams")));
         assert_eq!(parse_dur("0").unwrap(), Duration::ZERO);
         assert_eq!(parse_dur("1h30m").unwrap(), Duration::from_secs(5400));
         assert!(parse_dur("10").is_err());
