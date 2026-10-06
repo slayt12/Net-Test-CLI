@@ -36,6 +36,16 @@ pub enum FieldKind {
     Text,
     Toggle,
     Cycle,
+    /// Section title; not selectable.
+    Header,
+    /// Read-only line; not selectable.
+    Info,
+}
+
+impl FieldKind {
+    pub fn selectable(self) -> bool {
+        !matches!(self, FieldKind::Header | FieldKind::Info)
+    }
 }
 
 pub struct FieldDef {

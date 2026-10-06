@@ -14,7 +14,7 @@ use nettest_service::windows::{
 
 use super::{
     InstallArgs, Report, SERVICE_NAME, SPEC, ServiceError, describe, installed_config,
-    purge_files, service_paths, stage_config,
+    ServicePaths, purge_files, service_paths, stage_config,
 };
 use crate::monitor::{self, RunOptions};
 
@@ -169,4 +169,13 @@ async fn service_body(config: PathBuf, ctl: ServiceCtl) -> u32 {
     };
     ctl.running();
     monitor::run(resolved, opts, ctl.cancel.clone()).await as u32
+}
+
+/// (SCM available, service installed, state) for the TUI; `query_state` needs only
+/// SC_MANAGER_CONNECT + SERVICE_QUERY_STATUS, which any user has.
+pub fn probe(_paths: &ServicePaths) -> (bool, bool, String) {
+    match query_state(&SPEC) {
+        Some(st) => (true, true, format!("{st:?}").to_lowercase()),
+        None => (true, false, "-".into()),
+    }
 }

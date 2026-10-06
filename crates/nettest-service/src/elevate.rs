@@ -14,6 +14,14 @@ pub fn is_elevated() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
+/// Unix: identical to `reexec_elevated` (the tools need the terminal for their password prompt,
+/// so output cannot be captured); the returned text is empty. Exists so callers can be written
+/// once for both platforms.
+#[cfg(unix)]
+pub fn reexec_elevated_captured(args: &[OsString]) -> std::io::Result<(ExitCode, String)> {
+    reexec_elevated(args).map(|c| (c, String::new()))
+}
+
 #[cfg(unix)]
 pub fn reexec_elevated(args: &[OsString]) -> std::io::Result<ExitCode> {
     let exe = std::env::current_exe()?;
@@ -66,6 +74,15 @@ pub fn is_elevated() -> bool {
 
 #[cfg(windows)]
 pub fn reexec_elevated(args: &[OsString]) -> std::io::Result<ExitCode> {
+    let (code, text) = reexec_elevated_captured(args)?;
+    print!("{text}");
+    Ok(code)
+}
+
+/// Run elevated and return the child's captured output instead of printing it (the TUI shows
+/// it in a panel; UAC is a separate secure-desktop dialog, so the terminal is untouched).
+#[cfg(windows)]
+pub fn reexec_elevated_captured(args: &[OsString]) -> std::io::Result<(ExitCode, String)> {
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, GetLastError};
     use windows_sys::Win32::System::Threading::{
         GetExitCodeProcess, INFINITE, WaitForSingleObject,
@@ -119,11 +136,9 @@ pub fn reexec_elevated(args: &[OsString]) -> std::io::Result<ExitCode> {
         CloseHandle(info.hProcess);
         code
     };
-    if let Ok(text) = std::fs::read_to_string(&capture) {
-        print!("{text}");
-    }
+    let text = std::fs::read_to_string(&capture).unwrap_or_default();
     let _ = std::fs::remove_file(&capture);
-    Ok(ExitCode::from(code.min(255) as u8))
+    Ok((ExitCode::from(code.min(255) as u8), text))
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -136,6 +151,11 @@ pub fn reexec_elevated(_args: &[OsString]) -> std::io::Result<ExitCode> {
     Err(std::io::Error::other(
         "elevation is not supported on this platform",
     ))
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn reexec_elevated_captured(args: &[OsString]) -> std::io::Result<(ExitCode, String)> {
+    reexec_elevated(args).map(|c| (c, String::new()))
 }
 
 /// Quote one argument the way `CommandLineToArgvW` expects (MSVC rules). Pure, so it is unit

@@ -303,3 +303,117 @@ async fn teams_delivery_against_local_listener() {
     assert_eq!(card["content"]["body"][0]["text"], "nettest: pbx UP");
     assert_eq!(card["content"]["body"][0]["color"], "Good");
 }
+
+/// The TUI's certificate fetch must return the fingerprint the server itself reports.
+#[tokio::test]
+async fn peer_fingerprint_matches_the_server_certificate() {
+    let p = ports();
+    let server = spawn_on(&p).await;
+    let expected = server.fingerprint.expect("wss listener has a certificate");
+    let (got, addr) = nettest_proto::tls::client::peer_fingerprint(
+        "127.0.0.1",
+        p.wss,
+        None,
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("fetch");
+    assert_eq!(got, expected);
+    assert_eq!(addr.port(), p.wss);
+    // A non-TLS port must fail with a handshake error, not hang or panic.
+    let err = nettest_proto::tls::client::peer_fingerprint(
+        "127.0.0.1",
+        p.ws,
+        None,
+        Duration::from_secs(3),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.contains("tls handshake"), "{err}");
+    server.shutdown();
+}
+
+/// Alerts for an interactive run: synthetic runner events drive the same DOWN / UP rules as
+/// the monitor and the messages reach a local ntfy-style listener.
+#[tokio::test]
+async fn tui_run_alerts_reach_a_local_listener() {
+    use nettest_client::runner::UiEvent;
+    use nettest_client::tui::App;
+    use nettest_proto::transport::ConnectTimings;
+
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    let listener = tokio::spawn(async move {
+        let mut titles = Vec::new();
+        for _ in 0..2 {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let mut got = Vec::new();
+            loop {
+                let n = s.read(&mut buf).await.unwrap();
+                got.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&got).into_owned();
+                if n == 0 || text.contains("\r\n\r\n") && text.contains("DOWN") || text.contains("UP again") {
+                    break;
+                }
+            }
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                .await
+                .unwrap();
+            s.shutdown().await.unwrap();
+            let text = String::from_utf8_lossy(&got).into_owned();
+            let title = text
+                .lines()
+                .find_map(|l| l.strip_prefix("Title: "))
+                .unwrap_or("")
+                .to_string();
+            titles.push(title);
+        }
+        titles
+    });
+
+    let mut cfg = ClientConfig {
+        host: "10.0.0.7".into(),
+        port: 9101,
+        protocol: Protocol::Ws,
+        mode: TestMode::Soak,
+        ..Default::default()
+    };
+    cfg.alerts.failures_before_down = 1;
+    cfg.alerts.successes_before_up = 1;
+    cfg.alerts.hostname = "lab".into();
+    let mut app = App::new(
+        cfg,
+        std::env::temp_dir().join("nettest-tui-alerts-client.toml"),
+        std::env::temp_dir().join("nettest-tui-alerts-missing-monitor.toml"),
+    );
+    app.draft.cfg.notify.push(nettest_client::monitor::config::NotifyConfig {
+        url: format!("http://127.0.0.1:{port}/ops"),
+        ..Default::default()
+    });
+    app.start_for_test();
+    assert!(app.is_running_alerts(), "alerts should be armed");
+
+    app.on_runner_event(UiEvent::Connected(ConnectTimings::default())).await;
+    app.on_runner_event(UiEvent::Disconnected("connection reset".into())).await;
+    app.on_runner_event(UiEvent::Connected(ConnectTimings::default())).await;
+
+    let titles = tokio::time::timeout(Duration::from_secs(10), listener)
+        .await
+        .expect("both alerts delivered")
+        .unwrap();
+    assert_eq!(titles[0], "nettest: ws://10.0.0.7:9101 DOWN");
+    assert_eq!(titles[1], "nettest: ws://10.0.0.7:9101 UP");
+
+    // Delivery outcomes come back over the background channel and land in the run log.
+    for _ in 0..2 {
+        let ev = tokio::time::timeout(Duration::from_secs(5), app.bg_rx.recv())
+            .await
+            .expect("delivery report")
+            .unwrap();
+        app.on_bg(ev).await;
+    }
+    let log: Vec<String> = app.log.iter().map(|l| l.text.clone()).collect();
+    assert!(log.iter().any(|l| l.contains("alert: nettest: ws://10.0.0.7:9101 DOWN")), "{log:?}");
+    assert_eq!(log.iter().filter(|l| l.contains("delivered")).count(), 2, "{log:?}");
+}

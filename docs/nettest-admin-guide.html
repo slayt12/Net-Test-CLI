@@ -50,7 +50,7 @@
   <div>
     <h1>nettest Administrator Guide</h1>
     <p class="subtitle">Network path troubleshooting with the nettest client and server</p>
-    <p class="meta">Version 1.1.2 · Covers Windows 11 and Linux · October 2026 (revision 4: Microsoft Teams alerts, automatic monitor.toml encoding conversion)</p>
+    <p class="meta">Version 1.2.0 · Covers Windows 11 and Linux · October 2026 (revision 5: tabbed client UI with alerts, a monitor.toml builder and service control)</p>
   </div>
 </div>
 
@@ -144,7 +144,7 @@ nettest-server --bind 172.16.89.25 --ws-port 9100 --tcp-port 0 --udp-port 0 --ws
 <p>Security scanners (nmap, Nessus, Qualys and the like) must be able to identify every listening port. Anything that connects to a nettest listener without speaking the nettest protocol therefore receives a readable answer:</p>
 <table>
 <tr><th>What connects</th><th>What it receives</th></tr>
-<tr><td>An HTTP request on the TCP, ws or wss port (a browser, <code>curl</code>, an HTTP scanner)</td><td><code>HTTP/1.1 200 OK</code> with a <code>text/plain</code> body:<br><code>nettest by Slaytons Technology Services (nettest-server 1.1.2)</code></td></tr>
+<tr><td>An HTTP request on the TCP, ws or wss port (a browser, <code>curl</code>, an HTTP scanner)</td><td><code>HTTP/1.1 200 OK</code> with a <code>text/plain</code> body:<br><code>nettest by Slaytons Technology Services (nettest-server 1.2.0)</code></td></tr>
 <tr><td>Any other bytes, or a connection that sends nothing for 3 seconds (nmap's "null probe")</td><td>The same line without HTTP framing, then the connection is closed</td></tr>
 <tr><td>A UDP datagram that is not a nettest frame</td><td>The same line as one datagram, at most once per source address every 2 seconds and 50 per second overall, so the server cannot be abused to amplify traffic</td></tr>
 <tr><td>A TLS client on the wss port that never completes the handshake</td><td>The server certificate, which already identifies the service</td></tr>
@@ -201,14 +201,21 @@ token       set (32 chars)
 cert dir    /var/lib/nettest
 log file    /var/log/nettest/server.log
 idle        60 s
-banner      nettest by Slaytons Technology Services (nettest-server 1.1.2)
+banner      nettest by Slaytons Technology Services (nettest-server 1.2.0)
 wss SHA-256 6A:52:9B:B2:36:96:47:06:FB:F0:AC:7A:EE:A2:A7:CF:49:9D:89:45:D9:1C:9B:FE:3A:51:BD:52:21:9F:67:ED</pre>
 
 <h2 id="s4" class="page">4. Client: interactive terminal UI</h2>
 <p>Run <code>nettest-client</code> with no arguments, or with a target URL to pre-fill the form, for example <code>nettest-client ws://10.0.0.5:9101</code>. The client moves through three screens:</p>
-<pre>Settings  --(s)-->  Running: stats | live chart | log  --(x)-->  Summary</pre>
+<pre>Settings (Test | Alerts | Monitor | Service)  --(s)-->  Running: stats | live chart | log  --(x)-->  Summary</pre>
 <h3>Settings screen</h3>
-<p>All test settings are edited here. Text fields are edited with <kbd>Enter</kbd> (type, then <kbd>Enter</kbd> to commit or <kbd>Esc</kbd> to cancel). Toggles flip with <kbd>Enter</kbd> or <kbd>Space</kbd>; choice fields such as protocol cycle through their options. Invalid values are refused with a message on the status line. Fields that have no effect with the chosen protocol or mode (for example the token with <code>ping</code>, or the throughput fields in latency mode) are shown dimmed and their hint says so. The field reference is in <b>section 5</b>.</p>
+<p>The settings screen has four tabs, switched with <kbd>←</kbd> <kbd>→</kbd> or <kbd>F1</kbd>–<kbd>F4</kbd>. Text fields are edited with <kbd>Enter</kbd>: the current value is shown selected, so typing replaces it outright; <kbd>←</kbd> <kbd>→</kbd> <kbd>Home</kbd> <kbd>End</kbd> drop the selection to edit in place, <kbd>Enter</kbd> commits, <kbd>Esc</kbd> cancels. Toggles flip with <kbd>Enter</kbd> or <kbd>Space</kbd>; choice fields such as protocol cycle through their options. Invalid values are refused with a message on the status line. Fields that have no effect with the chosen protocol or mode are shown dimmed and their hint says so.</p>
+<table class="narrow">
+<tr><th>Tab</th><th>What it holds</th></tr>
+<tr><td><b>Test</b></td><td>The run settings (section 5). <kbd>f</kbd> fetches the server certificate's SHA-256 into the pinned-fingerprint field: it connects, completes a handshake that accepts any certificate, and fills in what it was shown. That is trust on first use; compare the value with the one printed by <code>nettest-server</code> before relying on it. <kbd>w</kbd> saves <code>client.toml</code>.</td></tr>
+<tr><td><b>Alerts</b></td><td>The webhooks and the alert rules for runs started from this screen. The webhooks are the <code>[[notify]]</code> entries of <code>monitor.toml</code> (section 9), so one webhook serves both the interactive client and the monitor service; <kbd>a</kbd> adds one, <kbd>d</kbd> deletes, <kbd>t</kbd> sends a test message to all of them and shows each outcome. The rules (send alerts during runs, DOWN after N failures, UP after M successes, reminder cadence, notify on start / finish, machine name) are saved in <code>client.toml</code>. During a run the same DOWN / UP messages as the service are sent and their delivery is logged in the log panel.</td></tr>
+<tr><td><b>Monitor</b></td><td>A <code>monitor.toml</code> builder: the <code>[monitor]</code> settings and the <code>[[targets]]</code> list. <kbd>a</kbd> adds a target pre-filled from the Test tab, <kbd>d</kbd> deletes one, <kbd>f</kbd> fetches a wss / https target's certificate fingerprint, <kbd>v</kbd> verifies the draft exactly as <code>monitor --check</code> does (errors, warnings, the resolved targets and notifiers), <kbd>t</kbd> tests the webhooks, <kbd>w</kbd> writes the file (private permissions; every key is written, comments of a hand-edited file are not kept), <kbd>l</kbd> reloads it from disk. A file that cannot be parsed is shown with its error and is never overwritten until <kbd>D</kbd> discards it.</td></tr>
+<tr><td><b>Service</b></td><td>Status of the monitor service (installed, active / running, paths, the installed configuration) read without privileges, and the actions <kbd>i</kbd> install from the path shown, <kbd>s</kbd> start, <kbd>x</kbd> stop, <kbd>r</kbd> restart, <kbd>u</kbd> uninstall, <kbd>U</kbd> uninstall with purge, <kbd>R</kbd> refresh. Stop, uninstall and purge ask <kbd>y</kbd>/<kbd>n</kbd>. Install validates the file first, so a password prompt is never shown for a configuration that would be refused. The tab says up front whether the client is running as root / Administrator; when it is not, Linux hands the terminal to <code>sudo</code> (then <code>pkexec</code>, <code>doas</code>) for the password and returns after <kbd>Enter</kbd>, Windows shows the UAC prompt and the captured output appears in the panel.</td></tr>
+</table>
 <h3>Running screen</h3>
 <p><b>Stats panel</b> (left): sent/received, lost with percentage, late/out-of-order/duplicate counts, in-flight probes, last RTT, min/avg/max, p50/p95/p99, jitter. Soak runs add disconnects, reconnects, uptime, longest outage and session length. Throughput runs show instantaneous and per-direction Mbit/s.</p>
 <p><b>Chart</b> (right): RTT over time as a line, with red markers along the baseline where probes were lost. In throughput mode it plots instantaneous Mbit/s. Keys <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> switch the window between the last 60 seconds, the last 5 minutes and the whole run.</p>
@@ -219,15 +226,21 @@ wss SHA-256 6A:52:9B:B2:36:96:47:06:FB:F0:AC:7A:EE:A2:A7:CF:49:9D:89:45:D9:1C:9B
 <h3>Keys</h3>
 <table class="keys">
 <tr><th>Key</th><th>Screen</th><th>Action</th></tr>
+<tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>F1</kbd>–<kbd>F4</kbd></td><td>Settings</td><td>Switch tab (Test, Alerts, Monitor, Service)</td></tr>
 <tr><td><kbd>↑</kbd> <kbd>↓</kbd> <kbd>Tab</kbd> <kbd>Shift-Tab</kbd></td><td>Settings</td><td>Move between fields</td></tr>
-<tr><td><kbd>Enter</kbd></td><td>Settings</td><td>Edit a text field, or flip a toggle</td></tr>
-<tr><td><kbd>Space</kbd></td><td>Settings</td><td>Cycle protocol, test mode, throughput direction; flip toggles</td></tr>
-<tr><td><kbd>s</kbd> or <kbd>F5</kbd></td><td>Settings, Summary</td><td>Start the test</td></tr>
-<tr><td><kbd>w</kbd></td><td>Settings</td><td>Save settings so they are pre-filled next time</td></tr>
+<tr><td><kbd>Enter</kbd></td><td>Settings</td><td>Edit a text field (value selected, typing replaces it), or flip a toggle</td></tr>
+<tr><td><kbd>Space</kbd></td><td>Settings</td><td>Cycle protocol, test mode, throughput direction, webhook kind; flip toggles</td></tr>
+<tr><td><kbd>s</kbd> or <kbd>F5</kbd></td><td>Test, Summary</td><td>Start the test</td></tr>
+<tr><td><kbd>w</kbd></td><td>Test / Alerts, Monitor</td><td>Save <code>client.toml</code> / write <code>monitor.toml</code></td></tr>
+<tr><td><kbd>f</kbd></td><td>Test, Alerts, Monitor</td><td>Fetch the TLS certificate fingerprint of the host under the cursor</td></tr>
+<tr><td><kbd>a</kbd> <kbd>d</kbd></td><td>Alerts, Monitor</td><td>Add / delete a webhook or target</td></tr>
+<tr><td><kbd>t</kbd></td><td>Alerts, Monitor</td><td>Send a test message to every webhook</td></tr>
+<tr><td><kbd>v</kbd> <kbd>l</kbd></td><td>Monitor</td><td>Verify the draft / reload it from disk</td></tr>
+<tr><td><kbd>i</kbd> <kbd>s</kbd> <kbd>x</kbd> <kbd>r</kbd> <kbd>u</kbd> <kbd>U</kbd> <kbd>R</kbd></td><td>Service</td><td>Install, start, stop, restart, uninstall, uninstall with purge, refresh status</td></tr>
 <tr><td><kbd>x</kbd> <kbd>s</kbd> <kbd>Esc</kbd></td><td>Running</td><td>Stop the test (waits briefly for in-flight probes so loss is accurate)</td></tr>
 <tr><td><kbd>r</kbd></td><td>Running, Summary</td><td>Write an HTML report now, from the data collected so far</td></tr>
 <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td><td>Running, Summary</td><td>Chart window: last 60 s, last 5 min, everything</td></tr>
-<tr><td><kbd>c</kbd></td><td>Running</td><td>Clear the log panel</td></tr>
+<tr><td><kbd>c</kbd></td><td>Running, Settings</td><td>Clear the log panel / the result panel of a tab</td></tr>
 <tr><td><kbd>Enter</kbd> <kbd>Esc</kbd> <kbd>b</kbd></td><td>Summary</td><td>Back to the settings screen</td></tr>
 <tr><td><kbd>?</kbd></td><td>Anywhere</td><td>Help overlay (any key closes it)</td></tr>
 <tr><td><kbd>q</kbd> or <kbd>Ctrl-C</kbd></td><td>Anywhere</td><td>Quit; a running test is stopped and its report written first</td></tr>
@@ -351,6 +364,7 @@ nettest-client sip://10.0.0.77</pre>
 <p>Typical use: one monitor per site, watching the things that site depends on, telling the on-call phone within seconds when the link to head office, the SIP trunk or the gateway stops answering, and again when it recovers, with the time it was down.</p>
 
 <h3>Workflow</h3>
+<p>Everything in this section can be done from the interactive client (section 4): the Monitor tab builds and verifies <code>monitor.toml</code>, the Alerts tab holds the webhooks and tests them, and the Service tab installs and controls the service. The command line below is the equivalent for scripts and remote shells.</p>
 <pre>nettest-client monitor --example-config > monitor.toml      # annotated template; edit targets and webhooks
 nettest-client monitor --config monitor.toml --check        # validate, list what would be watched
 nettest-client monitor --config monitor.toml --test-notify  # one test message to every notifier
@@ -447,7 +461,7 @@ pbx (sip://pbx.example.com:5060) has been DOWN for 1h00m: timed out — monitor 
 
 <h3>The log</h3>
 <p>The monitor writes one line per transition, per delivery result and (every <code>summary_every</code>) per target, so the log alone tells the story even if the webhooks were unreachable. In the foreground the log goes to the console; as a service to the file in the table below (and, on Linux, to <code>journalctl -u nettest-monitor</code>).</p>
-<pre>2026-10-05 13:09:07.816 INFO  nettest-client 1.1.2 monitor starting on branch-pc: 3 target(s), 1 notifier(s)
+<pre>2026-10-05 13:09:07.816 INFO  nettest-client 1.2.0 monitor starting on branch-pc: 3 target(s), 1 notifier(s)
 2026-10-05 13:09:07.818 INFO  [gateway] up
 2026-10-05 13:09:12.219 WARN  [pbx] DOWN after 3 consecutive failures: connection refused
 2026-10-05 13:09:12.219 INFO  notify ops phone (ntfy): delivered "nettest: pbx DOWN" (200) in 143 ms
@@ -555,10 +569,14 @@ nettest-client service status | restart | stop | start | uninstall      # manage
 <p>Alert rule: DOWN after <code>failures_before_down</code> (3) consecutive failures, UP after <code>successes_before_up</code> (1) successes, optional <code>remind_every</code>. Notifiers: <code>ntfy</code>, <code>slack</code>, <code>discord</code>, <code>teams</code>.</p>
 <table style="width:auto; display:inline-table; margin-right:24pt; vertical-align:top" class="keys">
 <tr><th colspan="2">Interactive keys</th></tr>
+<tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>tab: Test / Alerts / Monitor / Service</td></tr>
 <tr><td><kbd>s</kbd></td><td>start / run again</td></tr>
 <tr><td><kbd>x</kbd></td><td>stop</td></tr>
 <tr><td><kbd>r</kbd></td><td>write HTML report</td></tr>
-<tr><td><kbd>w</kbd></td><td>save settings</td></tr>
+<tr><td><kbd>w</kbd></td><td>save settings / write monitor.toml</td></tr>
+<tr><td><kbd>f</kbd></td><td>fetch certificate fingerprint</td></tr>
+<tr><td><kbd>v</kbd> <kbd>t</kbd></td><td>verify monitor.toml / test webhooks</td></tr>
+<tr><td><kbd>i</kbd> <kbd>x</kbd> <kbd>u</kbd></td><td>service install / stop / uninstall</td></tr>
 <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td><td>chart window 60 s / 5 min / all</td></tr>
 <tr><td><kbd>c</kbd></td><td>clear log</td></tr>
 <tr><td><kbd>?</kbd></td><td>help</td></tr>
@@ -579,6 +597,6 @@ Server service: <code>%ProgramData%\nettest\</code> or <code>/etc/nettest/server
 Monitor service: <code>%ProgramData%\nettest\monitor.toml</code> or <code>/etc/nettest/monitor.toml</code>, <code>/var/log/nettest-monitor/</code><br>
 Outputs: <code>nettest-&lt;timestamp&gt;.csv / .log / .jsonl / .html</code></p>
 
-<p class="footer">nettest Administrator Guide · Slaytons Technology Services · 2026-10-06 · revision 4 (version 1.1.2)</p>
+<p class="footer">nettest Administrator Guide · Slaytons Technology Services · 2026-10-06 · revision 5 (version 1.2.0)</p>
 </body>
 </html>

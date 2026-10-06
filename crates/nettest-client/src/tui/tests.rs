@@ -7,7 +7,8 @@ use nettest_proto::stats::{ChartPoint, LatencySnapshot, RunSummary, SoakSnapshot
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
-use super::app::{App, Link, Screen};
+use super::app::{App, Link, Screen, Tab};
+use crate::monitor::config::{NotifyConfig, TargetConfig};
 use crate::runner::{RunOutput, Snapshot, StopReason};
 
 fn draw(app: &mut App, w: u16, h: u16) -> String {
@@ -22,6 +23,14 @@ fn draw(app: &mut App, w: u16, h: u16) -> String {
         out.push('\n');
     }
     out
+}
+
+fn new_app() -> App {
+    App::new(
+        ClientConfig::default(),
+        PathBuf::from("/tmp/x.toml"),
+        std::env::temp_dir().join("nettest-tui-test-missing-monitor.toml"),
+    )
 }
 
 fn sample_snapshot() -> Snapshot {
@@ -80,7 +89,7 @@ fn sample_snapshot() -> Snapshot {
 
 #[test]
 fn form_screen_renders_all_fields() {
-    let mut app = App::new(ClientConfig::default(), PathBuf::from("/tmp/x.toml"));
+    let mut app = new_app();
     let s = draw(&mut app, 130, 40);
     println!("{s}");
     assert!(s.contains("Target host"));
@@ -95,7 +104,7 @@ fn form_screen_renders_all_fields() {
 
 #[test]
 fn running_screen_renders_stats_chart_log() {
-    let mut app = App::new(ClientConfig::default(), PathBuf::from("/tmp/x.toml"));
+    let mut app = new_app();
     app.screen = Screen::Running;
     app.link = Link::Connected;
     app.snapshot = sample_snapshot();
@@ -112,7 +121,7 @@ fn running_screen_renders_stats_chart_log() {
 
 #[test]
 fn summary_screen_renders() {
-    let mut app = App::new(ClientConfig::default(), PathBuf::from("/tmp/x.toml"));
+    let mut app = new_app();
     app.screen = Screen::Summary;
     app.snapshot = sample_snapshot();
     app.last_output = Some(RunOutput {
@@ -134,4 +143,74 @@ fn summary_screen_renders() {
     assert!(s.contains("run finished"));
     assert!(s.contains("rtt p50/p95/p99"));
     assert!(s.contains("nettest-20260101-000000.html"));
+}
+
+#[test]
+fn settings_tabs_render() {
+    let mut app = new_app();
+    app.draft.cfg.targets.push(TargetConfig {
+        name: "pbx".into(),
+        target: "wss://10.0.0.7:9101".into(),
+        ..Default::default()
+    });
+    app.draft.cfg.notify.push(NotifyConfig {
+        url: "https://ntfy.sh/ops".into(),
+        ..Default::default()
+    });
+
+    app.tab = Tab::Alerts;
+    let s = draw(&mut app, 100, 40);
+    println!("{s}");
+    assert!(s.contains("Send alerts during runs"));
+    assert!(s.contains("https://ntfy.sh/ops"));
+    assert!(s.contains("Alerts"));
+
+    app.tab = Tab::Monitor;
+    let s = draw(&mut app, 100, 40);
+    println!("{s}");
+    assert!(s.contains("[[targets]] #1  pbx"));
+    assert!(s.contains("wss://10.0.0.7:9101"));
+    assert!(s.contains("1 webhook(s)"));
+    // Narrow terminal: the list scrolls instead of overflowing.
+    let narrow = draw(&mut app, 80, 24);
+    assert!(narrow.contains("monitor.toml path"));
+
+    app.tab = Tab::Service;
+    app.service.status = Some(crate::service::ServiceStatus {
+        elevated: false,
+        user: "gabriel".into(),
+        supported: true,
+        installed: true,
+        state: "active".into(),
+        paths: crate::service::service_paths(),
+        config: Some(Ok(vec!["targets     1".into()])),
+    });
+    let s = draw(&mut app, 100, 40);
+    println!("{s}");
+    assert!(s.contains("user gabriel"));
+    assert!(s.contains("installed, active"));
+    assert!(s.contains("install from"));
+}
+
+#[test]
+fn editing_highlights_the_whole_value() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let mut app = new_app();
+    rt.block_on(app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+    let ed = app.editing.as_ref().expect("editing the host");
+    assert!(ed.selected());
+    assert_eq!(ed.text(), "127.0.0.1");
+    rt.block_on(app.on_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE)));
+    assert_eq!(app.editing.as_ref().unwrap().text(), "h");
+    rt.block_on(app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+    assert!(app.editing.is_none());
+    assert_eq!(app.cfg.host, "h");
+
+    // Cursor movement skips headers on the dynamic tabs and wraps.
+    rt.block_on(app.on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)));
+    assert_eq!(app.tab, Tab::Alerts);
+    assert!(app.rows()[app.cursor()].kind.selectable());
+    rt.block_on(app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)));
+    assert!(app.rows()[app.cursor()].kind.selectable());
 }

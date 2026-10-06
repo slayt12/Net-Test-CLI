@@ -61,6 +61,42 @@ impl Default for SinkConfig {
     }
 }
 
+/// Webhook alerts for interactive / headless runs. The notifiers themselves live in
+/// `monitor.toml` (`[[notify]]`, shared with the monitor service) so a webhook is configured
+/// once; these are only the thresholds and switches that apply to a TUI run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AlertConfig {
+    /// Master switch; with no `[[notify]]` entries nothing is sent anyway.
+    pub enabled: bool,
+    /// Send "test started" when a run begins.
+    pub on_start: bool,
+    /// Send a summary when a run ends.
+    pub on_finish: bool,
+    /// Consecutive failures that open an outage alert (DOWN).
+    pub failures_before_down: u32,
+    /// Consecutive successes that close it (UP).
+    pub successes_before_up: u32,
+    /// Re-send the DOWN alert at this cadence while still down; "0" = never.
+    pub remind_every: String,
+    /// Name of this machine in alert text ("" = detect).
+    pub hostname: String,
+}
+
+impl Default for AlertConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            on_start: false,
+            on_finish: false,
+            failures_before_down: 3,
+            successes_before_up: 1,
+            remind_every: "0".into(),
+            hostname: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ClientConfig {
@@ -92,6 +128,7 @@ pub struct ClientConfig {
     /// it so a slow cadence still declares a probe lost quickly.
     pub loss_timeout_ms: u64,
     pub sinks: SinkConfig,
+    pub alerts: AlertConfig,
 }
 
 impl Default for ClientConfig {
@@ -118,6 +155,7 @@ impl Default for ClientConfig {
             outage_after: 3,
             loss_timeout_ms: 0,
             sinks: SinkConfig::default(),
+            alerts: AlertConfig::default(),
         }
     }
 }

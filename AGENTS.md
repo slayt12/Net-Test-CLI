@@ -121,6 +121,24 @@ nobody has to rediscover them.
   https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook
   and https://learn.microsoft.com/en-us/connectors/teams/ ("Microsoft Teams - Webhook").
 
+- **TUI tabs and the shared `monitor.toml`.** The settings screen is tabbed (`tui/app.rs`
+  `Tab`): Test edits `ClientConfig`, Alerts and Monitor edit one `MonitorDraft` (`tui/draft.rs`,
+  the user's `monitor.toml`, loaded with the encoding-aware `config::load`, written whole by
+  `config::to_toml`, so comments are lost; a file that failed to parse is never overwritten), and
+  Service spawns `nettest-client service <verb>` as a child (`service::Verb::args`). Never call
+  the platform service functions in-process from the TUI (they print through `Report`) and never
+  `run_elevated` (it replays the TUI's own argv as root). On Linux a non-root service action sets
+  `App::suspend`; the event loop drops the crossterm `EventStream` *before* `ratatui::restore()`
+  and `reexec_elevated`, otherwise its reader thread competes with sudo for the tty. Windows uses
+  `elevate::reexec_elevated_captured` (UAC is its own dialog). Alert rules for TUI runs are
+  `ClientConfig::alerts` (`[alerts]` in client.toml); the notifiers are the draft's `[[notify]]`.
+  Rows are regenerated from state on every draw (`tui/rows.rs`), cursors index into them and
+  skip `Header` / `Info` kinds.
+- **Text editing selects the whole value on entry** (`tui/edit.rs` `Editor`): the first typed
+  char replaces it, arrows drop the selection. Keep that behaviour for any new text field.
+- **Certificate fetch** is `tls::client::peer_fingerprint` (Insecure verifier, `peer_certificates()`
+  of the leaf). It is trust-on-first-use; the UI must say so.
+
 ## Conventions
 
 - Every non-trivial file starts with a `//!` header: purpose, why, invariants.

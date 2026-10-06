@@ -1,8 +1,8 @@
 //! Screen rendering. Pure functions of `App` state; no side effects.
 
 mod chart;
-mod form;
 mod help;
+mod settings;
 mod running;
 mod summary;
 
@@ -12,7 +12,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use super::app::{App, Screen};
+use super::app::{App, Confirm, Screen};
 use nettest_proto::sinks::LogLevel;
 
 pub fn render(app: &mut App, f: &mut Frame) {
@@ -20,7 +20,7 @@ pub fn render(app: &mut App, f: &mut Frame) {
     let [body, status] = Layout::vertical([Constraint::Min(5), Constraint::Length(1)]).areas(area);
 
     match app.screen {
-        Screen::Form => form::render(app, f, body),
+        Screen::Form => settings::render(app, f, body),
         Screen::Running => running::render(app, f, body),
         Screen::Summary => summary::render(app, f, body),
     }
@@ -31,11 +31,26 @@ pub fn render(app: &mut App, f: &mut Frame) {
 }
 
 fn render_status(app: &App, f: &mut Frame, area: Rect) {
-    let line = match &app.status {
-        Some((level, text)) => Line::from(Span::styled(format!(" {text}"), level_style(*level))),
-        None => Line::from(Span::styled(" ", Style::default())),
+    let line = match (&app.confirm, &app.status) {
+        (Some(c), _) => Line::from(Span::styled(
+            format!(" {} (y/n)", confirm_text(*c)),
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        )),
+        (None, Some((level, text))) => {
+            Line::from(Span::styled(format!(" {text}"), level_style(*level)))
+        }
+        (None, None) => Line::from(Span::styled(" ", Style::default())),
     };
     f.render_widget(Paragraph::new(line), area);
+}
+
+fn confirm_text(c: Confirm) -> String {
+    match c {
+        Confirm::DeleteTarget(i) => format!("delete target #{}?", i + 1),
+        Confirm::DeleteNotifier(i) => format!("delete webhook #{}?", i + 1),
+        Confirm::Reload => "discard unsaved changes and reload the file?".into(),
+        Confirm::Service(v) => format!("run service {}?", v.label()),
+    }
 }
 
 pub fn level_style(level: LogLevel) -> Style {

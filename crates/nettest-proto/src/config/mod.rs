@@ -6,7 +6,7 @@ mod client;
 mod paths;
 mod server;
 
-pub use client::{ClientConfig, SinkConfig, TestMode};
+pub use client::{AlertConfig, ClientConfig, SinkConfig, TestMode};
 pub use paths::{client_config_path, config_dir, server_cert_dir, server_config_path};
 pub use server::{DEFAULT_BANNER, ServerConfig};
 

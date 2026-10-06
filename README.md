@@ -28,7 +28,7 @@ troubleshooting recipes: [nettest-admin-guide.pdf](nettest-admin-guide.pdf).
 
 Ready-to-run packages for every version are on the
 **[Releases page](https://github.com/slayt12/Net-Test-CLI/releases)**. Nothing to install: unpack,
-copy the file where you need it, run it. Current version **1.1.2**.
+copy the file where you need it, run it. Current version **1.2.0**.
 
 | Asset | Contents |
 |---|---|
@@ -117,25 +117,61 @@ are testing. UDP needs the port open inbound on the server, like any UDP service
 ### Interactive TUI
 
 ```
- Settings  →  s starts  →  Running (stats | live chart | log)  →  x stops  →  Summary
+ Settings (Test | Alerts | Monitor | Service)  →  s starts  →  Running (stats | live chart | log)  →  x stops  →  Summary
 ```
+
+The settings screen has four tabs, switched with `←`/`→` (or `F1`–`F4`):
+
+| Tab | What it holds |
+|---|---|
+| **Test** | the run settings (target, protocol, mode, sizes, TLS, outputs); `f` fetches the server certificate's SHA-256 into the pinned-fingerprint field |
+| **Alerts** | the webhooks (`[[notify]]` of `monitor.toml`, shared with the monitor service) and the DOWN / UP rules for runs started here; `t` sends a test message |
+| **Monitor** | a `monitor.toml` builder: targets, `[monitor]` settings, `v` verifies like `monitor --check`, `w` writes the file, `f` fetches a wss / https target's certificate fingerprint |
+| **Service** | installs, starts, stops, restarts or uninstalls the monitor service and shows its status; asks for sudo / UAC when not running as root / Administrator |
 
 | Key | Where | Action |
 |---|---|---|
-| `↑/↓`, `Tab`, `j/k` | settings | move between fields |
-| `Enter` | settings | edit a text field / flip a toggle |
-| `Space` | settings | cycle protocol, mode, direction |
-| `s`, `F5` | settings, summary | start the test |
-| `w` | settings | save settings to the config file |
+| `←/→`, `F1`–`F4` | settings | switch tab |
+| `↑/↓`, `Tab`, `j/k` | settings | move between fields (headers are skipped) |
+| `Enter` | settings | edit a text field / flip a toggle. The current value is selected: typing replaces it, `←/→` edit in place, `Enter` commits, `Esc` cancels |
+| `Space` | settings | cycle protocol, mode, direction, webhook kind |
+| `s`, `F5` | Test, summary | start the test |
+| `w` | Test | save `client.toml`; on Alerts / Monitor: write `monitor.toml` |
+| `f` | Test, Alerts, Monitor | fetch the TLS certificate fingerprint of the host under the cursor (wss / https) |
+| `a`, `d` | Alerts, Monitor | add / delete a webhook or target (`d` asks `y/n`) |
+| `t` | Alerts, Monitor | send a test message to every webhook |
+| `v`, `l` | Monitor | verify the draft (errors, warnings, resolved targets) / reload it from disk |
+| `i` `s` `x` `r` `u` `U` `R` | Service | install / start / stop / restart / uninstall / uninstall `--purge` / refresh status |
 | `x`, `s`, `Esc` | running | stop (waits for in-flight probes) |
 | `r` | running, summary | write an HTML report now |
 | `1` `2` `3` | running, summary | chart window: last 60 s / 5 min / everything |
-| `c` | running | clear the log panel |
+| `c` | running, settings panes | clear the log / result panel |
 | `?` | anywhere | help overlay |
 | `q`, `Ctrl-C` | anywhere | quit (stops a running test first) |
 
 The chart is RTT over time with red markers at the baseline where probes were lost. In
 throughput mode it shows instantaneous Mbit/s instead.
+
+**Alerts during a run.** With "Send alerts during runs" on (Alerts tab, default) and at least one
+webhook configured, a run started from the TUI sends the same DOWN / UP messages as the monitor
+service: DOWN after N consecutive failed probes or a disconnect, UP after M good ones, an
+optional reminder while still down, and optional "test started" / "test finished" messages
+(the finish message carries loss, p50/p95 and disconnect counts). The rules live in
+`client.toml` under `[alerts]`; the webhooks are the `[[notify]]` entries of `monitor.toml`, so
+one webhook serves both the interactive client and the service. Delivery outcomes appear in the
+log panel.
+
+**Fetching a fingerprint.** `f` connects to the host, completes a TLS handshake that accepts any
+certificate, and fills the field with the SHA-256 of the certificate it was shown. That is
+trust-on-first-use: compare the value with the one `nettest-server` printed before relying on it.
+
+**Service tab.** The status (installed, active / running, paths, the installed configuration) is
+read without privileges. Install / start / stop / restart / uninstall run `nettest-client service
+...` as a child process: already root or elevated, it runs in place and its output fills the
+panel; on Linux as a normal user the TUI hands the terminal to `sudo` (then `pkexec`, `doas`) so
+the password prompt is visible, and resumes after Enter; on Windows the UAC prompt appears and
+the captured output is shown in the panel. Install validates the file first, so a prompt is never
+shown for a configuration that would be refused.
 
 ### Headless (`--no-tui`)
 
@@ -259,9 +295,11 @@ Each flag accepts an optional explicit path: `--csv run1.csv`.
 ### Settings persistence
 
 The client remembers its last settings in `client.toml` under the per-user config directory
-(`%APPDATA%\nettest\` on Windows, `~/.config/nettest/` on Linux). Save with `w` in the TUI or
-`--save-config` headless. Precedence: flag > `NETTEST_*` environment variable > config file >
-default. `--config <path>` points at a different file.
+(`%APPDATA%\nettest\` on Windows, `~/.config/nettest/` on Linux), including the `[alerts]` rules
+of the Alerts tab. Save with `w` in the TUI or `--save-config` headless. Precedence: flag >
+`NETTEST_*` environment variable > config file > default. `--config <path>` points at a
+different file. The TUI's Alerts and Monitor tabs read and write `monitor.toml` in the same
+directory (the Monitor tab shows and lets you change the path).
 
 ---
 
@@ -272,6 +310,10 @@ webhook when one goes **DOWN** or comes back **UP**. It uses the same probes as 
 (ping, connect, sip, http/https against any device; ws/wss/tcp/udp against a nettest-server), so
 anything you can test you can monitor. Installed as a service it starts at boot and survives
 reboots, targets that are down at start, and webhook endpoints that are temporarily unreachable.
+
+Everything below can also be done from the TUI: the Monitor tab builds and verifies
+`monitor.toml`, the Alerts tab holds the webhooks, and the Service tab installs and controls the
+service. The command line is the scripted / remote-shell way.
 
 ```sh
 nettest-client monitor --example-config > monitor.toml     # annotated template, edit it
@@ -394,7 +436,7 @@ nettest-server service install|edit|uninstall|start|stop|restart|status [...]
   and wss ports an HTTP request receives `HTTP/1.1 200` with a `text/plain` body, any other bytes
   (or silence for 3 s) receive the bare line, and a non-nettest UDP datagram receives the same
   line (at most one reply per source IP every 2 s and 50 per second overall, so the server cannot
-  amplify traffic). The text is `nettest by Slaytons Technology Services (nettest-server 1.1.2)`;
+  amplify traffic). The text is `nettest by Slaytons Technology Services (nettest-server 1.2.0)`;
   `--banner` changes the first part. Real clients are unaffected: the first bytes are classified
   and replayed into the protocol handler. Each banner reply is logged as `[scan] <proto> <peer>`.
 * The TUI shows listeners, the wss fingerprint, and a live client table (protocol, peer,

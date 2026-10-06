@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use super::{InstallArgs, Report, ServiceError};
+use super::{InstallArgs, Report, ServiceError, ServicePaths};
 
 fn unsupported() -> Result<(), ServiceError> {
     Err(ServiceError::usage(
@@ -32,4 +32,8 @@ pub fn status(_: &mut Report) -> Result<(), ServiceError> {
 pub fn run_as_service(_: PathBuf) -> ExitCode {
     eprintln!("'service run' is the Windows service entry point");
     ExitCode::from(super::EXIT_USAGE)
+}
+
+pub fn probe(_paths: &ServicePaths) -> (bool, bool, String) {
+    (false, false, "unsupported platform".into())
 }

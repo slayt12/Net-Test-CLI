@@ -15,7 +15,7 @@ use nettest_service::systemd::{UnitSpec, render_unit};
 
 use super::{
     DESCRIPTION, InstallArgs, Report, SERVICE_NAME, ServiceError, describe, installed_config,
-    purge_files, service_paths, stage_config,
+    ServicePaths, purge_files, service_paths, stage_config,
 };
 
 fn unit_text(exec: &std::path::Path, paths: &super::ServicePaths) -> String {
@@ -153,6 +153,18 @@ pub fn run_as_service(_: PathBuf) -> ExitCode {
         "'service run' is the Windows service entry point; systemd runs `nettest-client monitor` directly"
     );
     ExitCode::from(super::EXIT_USAGE)
+}
+
+/// (systemd present, unit installed, active state) for the TUI; no privileges needed.
+pub fn probe(paths: &ServicePaths) -> (bool, bool, String) {
+    let supported = require_systemd().is_ok();
+    let installed = paths.unit.exists();
+    let state = if installed {
+        active_state(SERVICE_NAME)
+    } else {
+        "-".into()
+    };
+    (supported, installed, state)
 }
 
 #[cfg(test)]

@@ -7,7 +7,9 @@
 //! deliberately does not consult the operating system's store so behaviour is identical on
 //! every host.
 
+use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, SignatureScheme};
@@ -44,6 +46,43 @@ pub fn client_config(mode: TlsClientMode) -> Result<Arc<ClientConfig>, rustls::E
         .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
     Ok(Arc::new(cfg))
+}
+
+/// Connect to `host:port`, complete a TLS handshake accepting any certificate, and return the
+/// SHA-256 of the leaf certificate the server presented plus the address it was fetched from.
+/// Used by the TUI to fill a `fingerprint` field; the caller must tell the user to compare the
+/// value with the one the server prints, since a fetch cannot tell a legitimate server from an
+/// interceptor (trust on first use).
+pub async fn peer_fingerprint(
+    host: &str,
+    port: u16,
+    prefer_ipv6: Option<bool>,
+    timeout: Duration,
+) -> Result<(Fingerprint, SocketAddr), String> {
+    let (addr, _) = crate::transport::resolve(host, port, prefer_ipv6, timeout)
+        .await
+        .map_err(|e| e.to_string())?;
+    let tcp = tokio::time::timeout(timeout, tokio::net::TcpStream::connect(addr))
+        .await
+        .map_err(|_| format!("tcp connect to {addr}: timed out after {timeout:?}"))?
+        .map_err(|e| format!("tcp connect to {addr}: {e}"))?;
+    let cfg = client_config(TlsClientMode::Insecure).map_err(|e| e.to_string())?;
+    let name = ServerName::try_from(host.trim_matches(['[', ']']).to_string())
+        .map_err(|_| format!("'{host}' is not a valid TLS server name"))?;
+    let tls = tokio::time::timeout(
+        timeout,
+        tokio_rustls::TlsConnector::from(cfg).connect(name, tcp),
+    )
+    .await
+    .map_err(|_| format!("tls handshake with {addr}: timed out after {timeout:?}"))?
+    .map_err(|e| format!("tls handshake with {addr}: {e}"))?;
+    let der = tls
+        .get_ref()
+        .1
+        .peer_certificates()
+        .and_then(|c| c.first())
+        .ok_or_else(|| format!("{addr} sent no certificate"))?;
+    Ok((fingerprint::of_der(der.as_ref()), addr))
 }
 
 /// Built once: the root store holds ~150 anchors and every webhook would otherwise rebuild it.

@@ -168,6 +168,72 @@ fn d_notify_timeout() -> String {
     "10s".into()
 }
 
+/// A blank target with the file's defaults; `target` must still be filled in. Used by the TUI
+/// builder when a target is added.
+impl Default for TargetConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            target: String::new(),
+            interval: d_interval(),
+            timeout: d_timeout(),
+            token: String::new(),
+            insecure: false,
+            fingerprint: String::new(),
+            ws_path: String::new(),
+            ipv6: None,
+            payload_bytes: None,
+            failures_before_down: d_three(),
+            successes_before_up: d_one(),
+            remind_every: d_zero(),
+        }
+    }
+}
+
+/// A blank ntfy notifier with the file's defaults; `url` must still be filled in.
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            kind: NotifyKind::Ntfy,
+            url: String::new(),
+            name: String::new(),
+            token: String::new(),
+            priority: d_priority(),
+            tags_down: d_tags_down(),
+            tags_up: d_tags_up(),
+            insecure: false,
+            fingerprint: String::new(),
+            timeout: d_notify_timeout(),
+        }
+    }
+}
+
+impl NotifyKind {
+    pub const ALL: [NotifyKind; 4] = [
+        NotifyKind::Ntfy,
+        NotifyKind::Slack,
+        NotifyKind::Discord,
+        NotifyKind::Teams,
+    ];
+    pub fn next(self) -> Self {
+        let i = Self::ALL.iter().position(|k| *k == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+}
+
+/// Serialise for writing by the TUI builder. `toml` cannot keep comments, so a short header
+/// points at `--example-config` for the annotated form; every key is written out, defaults
+/// included, which keeps the file self-documenting.
+pub fn to_toml(cfg: &MonitorConfig) -> Result<String, String> {
+    let body = toml::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    Ok(format!(
+        "# nettest monitor configuration, written by nettest-client {} on {}.\n\
+         # Every key is listed; `nettest-client monitor --example-config` explains them.\n\n{body}",
+        env!("CARGO_PKG_VERSION"),
+        chrono::Local::now().format("%Y-%m-%d %H:%M")
+    ))
+}
+
 // ---- resolved form ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
@@ -485,8 +551,62 @@ pub fn resolve(cfg: &MonitorConfig) -> Result<Resolved, Vec<String>> {
         });
     }
 
+    let notifiers = resolve_notifiers_into(&cfg.notify, &mut errors, &mut warnings);
+    if cfg.notify.is_empty() {
+        warnings.push("no [[notify]] configured: transitions are logged only".to_string());
+    }
+
+    let summary_every = match parse_dur(&cfg.monitor.summary_every) {
+        Ok(d) => (!d.is_zero()).then_some(d.max(Duration::from_secs(10))),
+        Err(e) => {
+            errors.push(format!("[monitor] summary_every: {e}"));
+            None
+        }
+    };
+
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    Ok(Resolved {
+        log_file: non_empty_path(&cfg.monitor.log_file),
+        jsonl_file: non_empty_path(&cfg.monitor.jsonl_file),
+        summary_every,
+        notify_on_start: cfg.monitor.notify_on_start,
+        hostname: if cfg.monitor.hostname.trim().is_empty() {
+            super::local_hostname()
+        } else {
+            cfg.monitor.hostname.trim().to_string()
+        },
+        targets,
+        notifiers,
+        warnings,
+        encoding: Encoding::Utf8,
+    })
+}
+
+/// Resolve the `[[notify]]` list on its own, for callers that have no targets (the TUI sends
+/// alerts for its own run). `Err` carries every problem; `Ok` carries the notifiers and the
+/// non-fatal warnings.
+pub fn resolve_notifiers(
+    notify: &[NotifyConfig],
+) -> Result<(Vec<ResolvedNotifier>, Vec<String>), Vec<String>> {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let notifiers = resolve_notifiers_into(notify, &mut errors, &mut warnings);
+    if errors.is_empty() {
+        Ok((notifiers, warnings))
+    } else {
+        Err(errors)
+    }
+}
+
+fn resolve_notifiers_into(
+    notify: &[NotifyConfig],
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> Vec<ResolvedNotifier> {
     let mut notifiers = Vec::new();
-    for (i, n) in cfg.notify.iter().enumerate() {
+    for (i, n) in notify.iter().enumerate() {
         let name = if n.name.trim().is_empty() {
             format!("{}#{}", n.kind, i + 1)
         } else {
@@ -551,36 +671,7 @@ pub fn resolve(cfg: &MonitorConfig) -> Result<Resolved, Vec<String>> {
             timeout,
         });
     }
-    if cfg.notify.is_empty() {
-        warnings.push("no [[notify]] configured: transitions are logged only".to_string());
-    }
-
-    let summary_every = match parse_dur(&cfg.monitor.summary_every) {
-        Ok(d) => (!d.is_zero()).then_some(d.max(Duration::from_secs(10))),
-        Err(e) => {
-            errors.push(format!("[monitor] summary_every: {e}"));
-            None
-        }
-    };
-
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-    Ok(Resolved {
-        log_file: non_empty_path(&cfg.monitor.log_file),
-        jsonl_file: non_empty_path(&cfg.monitor.jsonl_file),
-        summary_every,
-        notify_on_start: cfg.monitor.notify_on_start,
-        hostname: if cfg.monitor.hostname.trim().is_empty() {
-            super::local_hostname()
-        } else {
-            cfg.monitor.hostname.trim().to_string()
-        },
-        targets,
-        notifiers,
-        warnings,
-        encoding: Encoding::Utf8,
-    })
+    notifiers
 }
 
 fn non_empty_path(s: &str) -> Option<PathBuf> {

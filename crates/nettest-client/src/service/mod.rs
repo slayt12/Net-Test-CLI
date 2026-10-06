@@ -27,6 +27,7 @@ mod unsupported;
 #[cfg(not(any(target_os = "linux", windows)))]
 use unsupported as platform;
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -120,6 +121,121 @@ pub fn dispatch(args: ServiceArgs) -> ExitCode {
             ServiceAction::Run { .. } => unreachable!("handled above"),
         }
     })
+}
+
+// ---- TUI support ---------------------------------------------------------------------------
+
+/// What the TUI's Service tab shows. Everything here is readable without privileges except
+/// the installed config (0600, root-owned on Linux), whose read error is reported as such.
+#[derive(Debug, Clone)]
+pub struct ServiceStatus {
+    pub elevated: bool,
+    pub user: String,
+    pub supported: bool,
+    pub installed: bool,
+    /// `active` / `inactive` / `failed` (systemd), `running` / `stopped` (SCM), `-` when not
+    /// installed.
+    pub state: String,
+    pub paths: ServicePaths,
+    /// `describe` lines of the installed config, or why it could not be read.
+    pub config: Option<Result<Vec<String>, String>>,
+}
+
+/// Blocking (runs `systemctl` / opens the SCM); call from `spawn_blocking`.
+pub fn status_probe() -> ServiceStatus {
+    let paths = service_paths();
+    let (supported, installed, state) = platform::probe(&paths);
+    let config = paths.config.exists().then(|| {
+        installed_config(&paths).map(|r| {
+            let mut lines = Vec::new();
+            for w in &r.warnings {
+                lines.push(format!("warning     {w}"));
+            }
+            lines.extend(describe(&r, &paths));
+            lines
+        })
+    });
+    ServiceStatus {
+        elevated: nettest_service::elevate::is_elevated(),
+        user: std::env::var("USER")
+            .or_else(|_| std::env::var("USERNAME"))
+            .unwrap_or_else(|_| "?".into()),
+        supported,
+        installed,
+        state,
+        paths,
+        config,
+    }
+}
+
+/// One Service-tab action, mapped to the CLI it spawns. The TUI never calls the platform
+/// functions in-process: they print through `Report`, and `run_elevated` would replay the TUI's
+/// own argv. Spawning `nettest-client service <verb>` reuses the tested path unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verb {
+    Install,
+    Start,
+    Stop,
+    Restart,
+    Uninstall,
+    /// `uninstall --purge`.
+    Purge,
+}
+
+impl Verb {
+    pub fn label(self) -> &'static str {
+        match self {
+            Verb::Install => "install",
+            Verb::Start => "start",
+            Verb::Stop => "stop",
+            Verb::Restart => "restart",
+            Verb::Uninstall => "uninstall",
+            Verb::Purge => "uninstall --purge",
+        }
+    }
+
+    /// Destructive or disruptive: the TUI asks `y/n` first.
+    pub fn needs_confirm(self) -> bool {
+        matches!(self, Verb::Stop | Verb::Uninstall | Verb::Purge)
+    }
+
+    /// Arguments after the executable. `from` is the monitor.toml to install (`None` re-installs
+    /// with the one already in place).
+    pub fn args(self, from: Option<&Path>) -> Vec<OsString> {
+        let mut v: Vec<OsString> = vec!["service".into()];
+        match self {
+            Verb::Install => {
+                v.push("install".into());
+                if let Some(p) = from {
+                    v.push("--from".into());
+                    v.push(p.as_os_str().to_owned());
+                }
+            }
+            Verb::Start => v.push("start".into()),
+            Verb::Stop => v.push("stop".into()),
+            Verb::Restart => v.push("restart".into()),
+            Verb::Uninstall => v.push("uninstall".into()),
+            Verb::Purge => {
+                v.push("uninstall".into());
+                v.push("--purge".into());
+            }
+        }
+        v
+    }
+}
+
+/// Run `nettest-client service ...` as a child with captured output; for a process that is
+/// already root / elevated. Returns the exit code and stdout + stderr, in that order.
+pub fn run_child(args: &[OsString]) -> Result<(i32, String), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current executable: {e}"))?;
+    let out = std::process::Command::new(&exe)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("could not run {}: {e}", exe.display()))?;
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    Ok((out.status.code().unwrap_or(1), text))
 }
 
 // ---- helpers shared by the platform backends ---------------------------------------------
